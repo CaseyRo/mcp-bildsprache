@@ -1,0 +1,18 @@
+services:
+  mcp-bildsprache:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8007:8000"  # 8007 = next sequential MCP port on ubuntu-smurf-mirror
+    environment:
+      - TRANSPORT=http
+      - HOST=0.0.0.0
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - BFL_API_KEY=${BFL_API_KEY:-}
+      - RECRAFT_API_KEY=${RECRAFT_API_KEY:-}
+      - RECRAFT_TIER=${RECRAFT_TIER:-free}
+      - MCP_BILDSPRACHE_API_KEY=${MCP_BILDSPRACHE_API_KEY:-}
+      - MCP_BILDSPRACHE_PUBLIC_URL=${MCP_BILDSPRACHE_PUBLIC_URL:-https://bildsprache.cdit-dev.de}
+      - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-https://auth.cdit-works.de/realms/cdit-mcp}
+      - RECRAFT_TIER=${RECRAFT_TIER:-free}
+      - KEYCLOAK_AUDIENCE=${KEYCLOAK_AUDIENCE:-mcp-bildsprache}
