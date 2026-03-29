@@ -15,6 +15,12 @@ BFL_API_URL = "https://api.bfl.ai/v1/flux-pro-1.1"
 BFL_RESULT_URL = "https://api.bfl.ai/v1/get_result"
 
 
+def _snap_to_32(value: int) -> int:
+    """BFL requires dimensions divisible by 32, between 256 and 1440."""
+    snapped = round(value / 32) * 32
+    return max(256, min(1440, snapped))
+
+
 async def generate_bfl(prompt: str, width: int = 1600, height: int = 900) -> dict:
     """Generate an image using FLUX.2 Pro via BFL API.
 
@@ -24,6 +30,10 @@ async def generate_bfl(prompt: str, width: int = 1600, height: int = 900) -> dic
     api_key = settings.bfl_api_key.get_secret_value()
     if not api_key:
         raise ValueError("BFL_API_KEY not configured")
+
+    # BFL requires dimensions divisible by 32, max 1440
+    width = _snap_to_32(width)
+    height = _snap_to_32(height)
 
     headers = {
         "Content-Type": "application/json",
