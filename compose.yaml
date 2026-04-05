@@ -16,3 +16,4 @@ services:
       - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-https://auth.cdit-works.de/realms/cdit-mcp}
       - RECRAFT_TIER=${RECRAFT_TIER:-free}
       - KEYCLOAK_AUDIENCE=${KEYCLOAK_AUDIENCE:-mcp-bildsprache}
+      - ENABLE_HOSTING=${ENABLE_HOSTING:-false}
