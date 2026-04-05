@@ -17,3 +17,8 @@ services:
       - RECRAFT_TIER=${RECRAFT_TIER:-free}
       - KEYCLOAK_AUDIENCE=${KEYCLOAK_AUDIENCE:-mcp-bildsprache}
       - ENABLE_HOSTING=${ENABLE_HOSTING:-false}
+    volumes:
+      - bildsprache_images:/data/images
+
+volumes:
+  bildsprache_images:

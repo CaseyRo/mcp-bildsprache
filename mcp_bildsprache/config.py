@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     keycloak_issuer: str = "https://auth.cdit-works.de/realms/cdit-mcp"
     keycloak_audience: str = "mcp-bildsprache"
 
+    # Image hosting
+    enable_hosting: bool = False
+    images_dir: str = "/data/images"
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
     def model_post_init(self, __context: Any) -> None:

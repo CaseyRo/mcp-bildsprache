@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import logging
+import os
+import uuid
 
+import httpx
 from fastmcp import FastMCP
 
 from mcp_bildsprache.auth import create_auth
@@ -48,6 +52,65 @@ def _build_auth():
 
 
 mcp = FastMCP("mcp-bildsprache", auth=_build_auth())
+
+
+def _setup_hosting() -> None:
+    """Mount static file serving for /data/images when ENABLE_HOSTING=true."""
+    if not settings.enable_hosting:
+        return
+
+    images_dir = settings.images_dir
+    os.makedirs(images_dir, exist_ok=True)
+    logger.info("Static file serving enabled at %s", images_dir)
+
+    try:
+        from starlette.routing import Mount
+        from starlette.staticfiles import StaticFiles
+        mcp._additional_http_routes.append(
+            Mount("/images", app=StaticFiles(directory=images_dir, check_dir=False), name="images")
+        )
+    except Exception as exc:
+        logger.warning("Could not mount static files: %s", exc)
+
+
+async def _save_image_and_get_url(result: dict) -> str | None:
+    """Save generated image to disk and return its hosted URL. Returns None if save fails."""
+    images_dir = settings.images_dir
+    os.makedirs(images_dir, exist_ok=True)
+
+    image_id = str(uuid.uuid4())
+
+    if "image_base64" in result:
+        # Gemini: inline base64 data
+        mime = result.get("mime_type", "image/png")
+        ext = mime.split("/")[-1].replace("jpeg", "jpg")
+        filename = f"{image_id}.{ext}"
+        filepath = os.path.join(images_dir, filename)
+        image_bytes = base64.b64decode(result["image_base64"])
+        with open(filepath, "wb") as f:
+            f.write(image_bytes)
+        return f"{settings.base_url}/images/{filename}"
+
+    if "image_url" in result:
+        # BFL / Recraft: remote URL — download and save
+        source_url = result["image_url"]
+        ext = "jpg"
+        if ".png" in source_url:
+            ext = "png"
+        filename = f"{image_id}.{ext}"
+        filepath = os.path.join(images_dir, filename)
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(source_url)
+                resp.raise_for_status()
+                with open(filepath, "wb") as f:
+                    f.write(resp.content)
+            return f"{settings.base_url}/images/{filename}"
+        except Exception as exc:
+            logger.warning("Failed to download and save image from %s: %s", source_url, exc)
+            return None
+
+    return None
 
 
 @mcp.tool
@@ -108,6 +171,12 @@ async def generate_image(
     result["platform"] = platform
     result["dimensions"] = f"{w}x{h}"
     result["prompt_used"] = enhanced_prompt
+
+    if settings.enable_hosting:
+        hosted_url = await _save_image_and_get_url(result)
+        if hosted_url:
+            result["hosted_url"] = hosted_url
+
     return result
 
 
@@ -210,6 +279,7 @@ async def get_brand_presets(context: str | None = None) -> dict:
 
 def main() -> None:
     """Entry point for the mcp-bildsprache server."""
+    _setup_hosting()
     if settings.transport == "http":
         mcp.run(transport="http", host=settings.host, port=settings.port)
     else:

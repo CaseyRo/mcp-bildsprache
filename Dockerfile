@@ -6,7 +6,8 @@ COPY pyproject.toml README.md ./
 COPY mcp_bildsprache/ ./mcp_bildsprache/
 
 RUN pip install --no-cache-dir . && \
-    addgroup --system mcp && adduser --system --ingroup mcp mcp
+    addgroup --system mcp && adduser --system --ingroup mcp mcp && \
+    mkdir -p /data/images && chown -R mcp:mcp /data
 
 USER mcp
 
