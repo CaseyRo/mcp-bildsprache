@@ -61,7 +61,7 @@ def _setup_hosting() -> None:
 
     images_dir = settings.images_dir
     os.makedirs(images_dir, exist_ok=True)
-    logger.info("Static file serving enabled at %s", images_dir)
+    logger.warning("Static file serving enabled at %s", images_dir)
 
     try:
         from starlette.routing import Mount
