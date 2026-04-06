@@ -42,6 +42,9 @@ def _build_auth():
     """Build auth provider if running in HTTP mode."""
     if settings.transport != "http":
         return None
+    if not getattr(settings, 'keycloak_client_secret', ''):
+        logger.warning("KEYCLOAK_CLIENT_SECRET is empty — OAuth/OIDC auth disabled")
+        return None
     api_key = settings.ensure_api_key()
     return create_auth(
         api_key=api_key,

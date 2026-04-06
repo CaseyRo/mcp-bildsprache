@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # Keycloak JWT validation
     keycloak_issuer: str = "https://auth.cdit-works.de/realms/cdit-mcp"
     keycloak_audience: str = "mcp-bildsprache"
+    keycloak_client_secret: str = ""
 
     # Image hosting
     enable_hosting: bool = False
