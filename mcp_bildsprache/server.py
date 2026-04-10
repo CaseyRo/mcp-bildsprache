@@ -311,8 +311,8 @@ async def get_visual_presets(context: BrandContext | None = None) -> dict:
     }
 
 
-def _mount_static_files() -> None:
-    """Mount the image storage directory for static serving via Caddy."""
+def _mount_static_files(app) -> None:
+    """Mount the image storage directory for static serving."""
     from pathlib import Path
 
     from starlette.staticfiles import StaticFiles
@@ -320,17 +320,18 @@ def _mount_static_files() -> None:
     storage_path = Path(settings.image_storage_path)
     storage_path.mkdir(parents=True, exist_ok=True)
 
-    # Mount at root so img.cdit-works.de/<brand>/<slug>.webp works
-    # This is served by the img.cdit-works.de Caddy route
-    mcp.http_app.mount("/", StaticFiles(directory=str(storage_path)), name="images")
+    app.mount("/images", StaticFiles(directory=str(storage_path)), name="images")
     logger.info("Static file serving enabled at %s", storage_path)
 
 
 def main() -> None:
     """Entry point for the mcp-bildsprache server."""
-    _mount_static_files()
     if settings.transport == "http":
-        mcp.run(transport="http", host=settings.host, port=settings.port)
+        app = mcp.http_app(transport="http")
+        _mount_static_files(app)
+        import uvicorn
+
+        uvicorn.run(app, host=settings.host, port=settings.port)
     else:
         mcp.run()
 
