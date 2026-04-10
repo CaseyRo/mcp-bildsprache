@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.4] - 2026-04-10
+
+- fix: register webp/avif mime types for correct Content-Type headers
+
+
 ## [0.3.3] - 2026-04-10
 
 - fix: mount static files at root path for img.cdit-works.de compatibility
