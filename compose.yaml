@@ -14,11 +14,16 @@ services:
       - MCP_BILDSPRACHE_API_KEY=${MCP_BILDSPRACHE_API_KEY:-}
       - MCP_BILDSPRACHE_PUBLIC_URL=${MCP_BILDSPRACHE_PUBLIC_URL:-https://bildsprache.cdit-dev.de}
       - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-https://auth.cdit-works.de/realms/cdit-mcp}
-      - RECRAFT_TIER=${RECRAFT_TIER:-free}
       - KEYCLOAK_AUDIENCE=${KEYCLOAK_AUDIENCE:-mcp-bildsprache}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-bildsprache}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - ENABLE_HOSTING=${ENABLE_HOSTING:-false}
+      - IMAGE_DOMAIN=${IMAGE_DOMAIN:-https://img.cdit-works.de}
+      - FASTMCP_HOME=/data/fastmcp
     volumes:
-      - bildsprache_images:/data/images
+      - fastmcp-data:/data/fastmcp
+      - images-data:/data/images
 
 volumes:
-  bildsprache_images:
+  fastmcp-data:
+  images-data:

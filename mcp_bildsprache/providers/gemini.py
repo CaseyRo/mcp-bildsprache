@@ -8,9 +8,12 @@ import logging
 import httpx
 
 from mcp_bildsprache.config import settings
+from mcp_bildsprache.types import ProviderResult
 
 logger = logging.getLogger(__name__)
 
+# Ordered by preference — first available model wins.
+# Update this list when Google releases new image generation models.
 GEMINI_MODELS = [
     "gemini-3.1-flash-image-preview",  # Nano Banana 2 (best, preview)
     "gemini-2.5-flash-image",           # Stable fallback
@@ -18,11 +21,11 @@ GEMINI_MODELS = [
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
-async def generate_gemini(prompt: str, width: int = 1200, height: int = 1200) -> dict:
+async def generate_gemini(prompt: str, width: int = 1200, height: int = 1200) -> ProviderResult:
     """Generate an image using Gemini's multimodal generation.
 
     Tries Nano Banana 2 first, falls back to gemini-2.5-flash-image if unavailable.
-    Returns dict with 'image_base64', 'mime_type', and 'model'.
+    Returns a ProviderResult with decoded image bytes.
     """
     api_key = settings.gemini_api_key.get_secret_value()
     if not api_key:
@@ -41,7 +44,7 @@ async def generate_gemini(prompt: str, width: int = 1200, height: int = 1200) ->
 
 async def _generate_with_model(
     api_key: str, model: str, prompt: str, width: int, height: int
-) -> dict:
+) -> ProviderResult:
     """Generate with a specific Gemini model."""
     url = f"{GEMINI_URL}/{model}:generateContent?key={api_key}"
 
@@ -77,11 +80,12 @@ async def _generate_with_model(
     parts = candidates[0].get("content", {}).get("parts", [])
     for part in parts:
         if "inlineData" in part:
-            return {
-                "image_base64": part["inlineData"]["data"],
-                "mime_type": part["inlineData"]["mimeType"],
-                "model": model,
-                "cost_estimate": "$0.01",
-            }
+            image_bytes = base64.b64decode(part["inlineData"]["data"])
+            return ProviderResult(
+                image_data=image_bytes,
+                mime_type=part["inlineData"]["mimeType"],
+                model=model,
+                cost_estimate="$0.01",
+            )
 
     raise ValueError(f"Gemini ({model}) returned no image data in response")

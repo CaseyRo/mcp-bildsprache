@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # Recraft tier (free vs pro — affects license warnings)
     recraft_tier: Literal["free", "pro"] = "free"
 
+    # Image hosting
+    enable_hosting: bool = True
+    image_domain: str = "https://img.cdit-works.de"
+    image_storage_path: str = "/data/images"
+
     # Server transport
     transport: Literal["stdio", "http"] = "stdio"
     host: str = "127.0.0.1"
@@ -30,14 +35,11 @@ class Settings(BaseSettings):
     mcp_bildsprache_api_key: str = ""
     mcp_bildsprache_public_url: str = ""
 
-    # Keycloak JWT validation
+    # Keycloak OIDC
     keycloak_issuer: str = "https://auth.cdit-works.de/realms/cdit-mcp"
     keycloak_audience: str = "mcp-bildsprache"
+    keycloak_client_id: str = "mcp-bildsprache"
     keycloak_client_secret: str = ""
-
-    # Image hosting
-    enable_hosting: bool = False
-    images_dir: str = "/data/images"
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 

@@ -1,4 +1,4 @@
-"""Recraft V3 image generation provider."""
+"""Recraft V4 image generation provider."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 import httpx
 
 from mcp_bildsprache.config import settings
+from mcp_bildsprache.types import ProviderResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,11 @@ async def generate_recraft(
     prompt: str,
     width: int = 1024,
     height: int = 1024,
-    style: str = "digital_illustration",
-) -> dict:
-    """Generate an image using Recraft V3.
+) -> ProviderResult:
+    """Generate an image using Recraft V4.
 
-    Returns dict with 'image_url', 'model', 'cost_estimate', and optional 'license_warning'.
+    V4 does not support named style presets — style is prompt-driven.
+    Downloads the image and returns a ProviderResult with raw bytes.
     """
     api_key = settings.recraft_api_key.get_secret_value()
     if not api_key:
@@ -55,8 +56,7 @@ async def generate_recraft(
 
     payload = {
         "prompt": prompt,
-        "model": "recraftv3",
-        "style": style,
+        "model": "recraftv4",
         "size": _snap_size(width, height),
     }
 
@@ -69,18 +69,20 @@ async def generate_recraft(
     if not images:
         raise ValueError("Recraft returned no images")
 
-    result = {
-        "image_url": images[0].get("url", ""),
-        "image_id": images[0].get("image_id", ""),
-        "model": "recraft-v3",
-        "cost_estimate": "1-2 credits (free tier)",
-    }
+    image_url = images[0].get("url", "")
+    if not image_url:
+        raise ValueError("Recraft returned no image URL")
 
-    # Add license warning for free tier
-    if settings.recraft_tier == "free":
-        result["license_warning"] = (
-            "Free tier output — no commercial license. "
-            "Upgrade to Recraft Pro ($48/mo) for commercial use."
-        )
+    # Download the image from the temporary URL
+    async with httpx.AsyncClient(timeout=30.0) as dl_client:
+        img_response = await dl_client.get(image_url)
+        img_response.raise_for_status()
 
-    return result
+    content_type = img_response.headers.get("content-type", "image/png")
+
+    return ProviderResult(
+        image_data=img_response.content,
+        mime_type=content_type,
+        model="recraft-v4",
+        cost_estimate="$0.04",
+    )

@@ -91,15 +91,25 @@ def route_model(
     platform: str | None = None,
     model_hint: str | None = None,
 ) -> str:
-    """Route to the optimal image generation model.
+    """Route to the optimal image generation provider.
+
+    Returns a provider key: "flux", "gemini", or "recraft".
+    The provider itself handles model selection internally.
 
     Priority:
     1. Explicit model_hint overrides everything
-    2. Vector/icon/illustration → Recraft (unique capability)
-    3. Everything else → FLUX.2 Pro (best quality, regardless of cost)
+    2. Vector/icon/illustration → Recraft V4 (unique SVG capability)
+    3. Everything else → FLUX (FLUX.2 Max by default)
     """
     if model_hint:
-        return model_hint
+        # Allow both provider keys ("flux") and specific model IDs ("flux-2-max")
+        if model_hint.startswith("flux"):
+            return "flux"
+        if model_hint.startswith("recraft"):
+            return "recraft"
+        if model_hint.startswith("gemini"):
+            return "gemini"
+        raise ValueError(f"Unknown model: {model_hint}. Valid models: gemini, flux, flux-2-max, flux-2-pro, flux-kontext-pro, flux-pro-1.1, recraft")
 
     # Recraft for vectors/icons — unique capability FLUX can't do
     if platform:
@@ -107,5 +117,5 @@ def route_model(
         if any(kw in p for kw in ("icon", "svg", "vector", "logo", "illustration")):
             return "recraft"
 
-    # FLUX for everything else — best quality, always
+    # FLUX.2 Max for everything else — best quality
     return "flux"
