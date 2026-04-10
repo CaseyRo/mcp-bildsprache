@@ -1,6 +1,6 @@
 [project]
 name = "mcp-bildsprache"
-version = "0.3.2"
+version = "0.3.3"
 description = "MCP server for brand-aware image generation — Gemini, FLUX.2 Pro, Recraft V3"
 readme = "README.md"
 license = "MIT"

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.3] - 2026-04-10
+
+- fix: mount static files at root path for img.cdit-works.de compatibility
+
+
 ## [0.3.2] - 2026-04-10
 
 - fix: use FastMCP 3.2.x http_app() API for static file mounting
