@@ -320,7 +320,7 @@ def _mount_static_files(app) -> None:
     storage_path = Path(settings.image_storage_path)
     storage_path.mkdir(parents=True, exist_ok=True)
 
-    app.mount("/images", StaticFiles(directory=str(storage_path)), name="images")
+    app.mount("/", StaticFiles(directory=str(storage_path)), name="images")
     logger.info("Static file serving enabled at %s", storage_path)
 
 
