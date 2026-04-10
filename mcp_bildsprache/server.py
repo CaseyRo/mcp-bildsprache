@@ -313,9 +313,14 @@ async def get_visual_presets(context: BrandContext | None = None) -> dict:
 
 def _mount_static_files(app) -> None:
     """Mount the image storage directory for static serving."""
+    import mimetypes
     from pathlib import Path
 
     from starlette.staticfiles import StaticFiles
+
+    # Ensure image mime types are registered (python:slim may lack these)
+    mimetypes.add_type("image/webp", ".webp")
+    mimetypes.add_type("image/avif", ".avif")
 
     storage_path = Path(settings.image_storage_path)
     storage_path.mkdir(parents=True, exist_ok=True)
