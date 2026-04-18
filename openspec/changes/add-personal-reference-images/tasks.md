@@ -8,22 +8,22 @@
 
 ## 2. Manifest loader
 
-- [ ] 2.1 Create `mcp_bildsprache/identity.py` with `load_identity_packs(root: Path) -> dict[str, IdentityPack]`
-- [ ] 2.2 Implement JSON schema validation (pydantic model matching the design doc shape) with `slots`, `rules.always_include`, `rules.include_if_prompt_matches`, `rules.exclude_if_prompt_matches`
-- [ ] 2.3 Implement per-brand directory scan under `/data/identity/*/manifest.json` (no monolithic keyed file)
-- [ ] 2.4 Implement safe degradation: missing dir → no packs (no warn), missing manifest → WARN once, unparseable manifest → WARN once with error, missing referenced file → WARN per file and mark slot unavailable
-- [ ] 2.5 Emit a single `INFO` `identity_pack_loaded=True brand=... slots=[...]` per successfully loaded pack
-- [ ] 2.6 Cache loaded packs in process memory (module-level dict, populated at startup)
+- [x] 2.1 Create `mcp_bildsprache/identity.py` with `load_identity_packs(root: Path) -> dict[str, IdentityPack]`
+- [x] 2.2 Implement JSON schema validation (pydantic model matching the design doc shape) with `slots`, `rules.always_include`, `rules.include_if_prompt_matches`, `rules.exclude_if_prompt_matches`
+- [x] 2.3 Implement per-brand directory scan under `/data/identity/*/manifest.json` (no monolithic keyed file)
+- [x] 2.4 Implement safe degradation: missing dir → no packs (no warn), missing manifest → WARN once, unparseable manifest → WARN once with error, missing referenced file → WARN per file and mark slot unavailable
+- [x] 2.5 Emit a single `INFO` `identity_pack_loaded=True brand=... slots=[...]` per successfully loaded pack
+- [x] 2.6 Cache loaded packs in process memory (module-level dict, populated at startup)
 
 ## 3. Identity resolution
 
-- [ ] 3.1 Implement `resolve_identity(pack: IdentityPack, prompt: str) -> list[Path]` as a pure function in `identity.py`
-- [ ] 3.2 Implement person-excluding marker check (`"icon"`, `"flat illustration"`, `"abstract pattern"`, `"logo"`, `"architectural detail"`, …) — on match, return `[]`
-- [ ] 3.3 Implement `always_include` slot attachment when person is plausible
-- [ ] 3.4 Implement `include_if_prompt_matches` scan (case-insensitive substring, OR across keywords)
-- [ ] 3.5 Implement `exclude_if_prompt_matches` override (exclude wins over include)
-- [ ] 3.6 Guarantee deterministic output order (manifest declaration order)
-- [ ] 3.7 Expose `resolve_identity_for_call(pack, prompt, include_dogs: bool | None) -> list[Path]` wrapper that handles the `include_dogs` override
+- [x] 3.1 Implement `resolve_identity(pack: IdentityPack, prompt: str) -> list[Path]` as a pure function in `identity.py`
+- [x] 3.2 Implement person-excluding marker check (`"icon"`, `"flat illustration"`, `"abstract pattern"`, `"logo"`, `"architectural detail"`, …) — on match, return `[]`
+- [x] 3.3 Implement `always_include` slot attachment when person is plausible
+- [x] 3.4 Implement `include_if_prompt_matches` scan (case-insensitive substring, OR across keywords)
+- [x] 3.5 Implement `exclude_if_prompt_matches` override (exclude wins over include)
+- [x] 3.6 Guarantee deterministic output order (manifest declaration order)
+- [x] 3.7 Expose `resolve_identity_for_call(pack, prompt, include_dogs: bool | None) -> list[Path]` wrapper that handles the `include_dogs` override
 
 ## 4. Provider — Gemini reference support
 
@@ -77,9 +77,9 @@
 
 ## 11. Tests
 
-- [ ] 11.1 `tests/test_identity.py` — manifest loader: valid / missing dir / missing manifest / malformed JSON / missing image files (one case each)
-- [ ] 11.2 `tests/test_identity.py` — `resolve_identity` cases: personal prompt → casey only; outdoor prompt → casey+dogs; client prompt → casey only (exclude wins); person-excluding marker → empty; deterministic order
-- [ ] 11.3 `tests/test_identity.py` — `include_dogs=True/False/None` override semantics
+- [x] 11.1 `tests/test_identity.py` — manifest loader: valid / missing dir / missing manifest / malformed JSON / missing image files (one case each)
+- [x] 11.2 `tests/test_identity.py` — `resolve_identity` cases: personal prompt → casey only; outdoor prompt → casey+dogs; client prompt → casey only (exclude wins); person-excluding marker → empty; deterministic order
+- [x] 11.3 `tests/test_identity.py` — `include_dogs=True/False/None` override semantics
 - [ ] 11.4 `tests/test_providers.py` — Gemini: references become `inlineData` parts in order; unsupported mime raises pre-request; text-only unchanged
 - [ ] 11.5 `tests/test_providers.py` — BFL: single ref → kontext-pro; multi-ref → collage → kontext-pro; kontext-pro fail → flux-2-pro with image_prompt; flux-2-max never called when refs present; cost/model reflect actual success
 - [ ] 11.6 `tests/test_providers.py` — Recraft: log-and-drop, text-only request unchanged
