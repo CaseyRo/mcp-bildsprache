@@ -3,7 +3,12 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8007:8000"  # 8007 = next sequential MCP port on ubuntu-smurf-mirror
+      - "8007:8000"  # 8007 = next sequential MCP port on nebula-1
+    labels:
+      docktail.service.enable: "true"
+      docktail.service.name: "bildsprache-gallery"
+      docktail.service.port: "8000"
+      docktail.service.network: "git-mcp-bildsprache-nebula_default"
     environment:
       - TRANSPORT=http
       - HOST=0.0.0.0
@@ -20,6 +25,12 @@ services:
       - ENABLE_HOSTING=${ENABLE_HOSTING:-false}
       - IMAGE_DOMAIN=${IMAGE_DOMAIN:-https://img.cdit-works.de}
       - FASTMCP_HOME=/data/fastmcp
+      - GALLERY_ENABLED=${GALLERY_ENABLED:-true}
+      - GALLERY_TAILNET_HOSTNAME=${GALLERY_TAILNET_HOSTNAME:-}
+      - GALLERY_REINDEX_INTERVAL_SECONDS=${GALLERY_REINDEX_INTERVAL_SECONDS:-300}
+      - GALLERY_SOFT_ZIP_CAP_MB=${GALLERY_SOFT_ZIP_CAP_MB:-250}
+      - IDENTITY_ENABLED=${IDENTITY_ENABLED:-true}
+      - IDENTITY_DIR=${IDENTITY_DIR:-/data/identity}
     volumes:
       - fastmcp-data:/data/fastmcp
       - images-data:/data/images
