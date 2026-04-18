@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+# Compositional rule applied when the @casey.berlin identity pack resolves
+# to a non-empty list of reference slots (i.e. a person is plausibly in the
+# frame). Gated by server.py — not embedded in the PRESETS dict so that
+# person-excluding prompts (icon, abstract pattern, etc.) stay clean.
+CASEY_COMPOSITION_CLAUSE: str = (
+    "Composition: when a person appears, they are embedded in the scene doing "
+    "something, never face-to-camera, never centered as the sole focal point. "
+    "If multiple people are present, the subject is one of them — not the lead."
+)
+
 PRESETS: dict[str, str] = {
     "casey.berlin": (
         "Style: European editorial photography. Bureau Cool aesthetic. "

@@ -234,9 +234,14 @@ class TestOtherTools:
 
             result = await list_models()
 
-        assert len(result) == 3
-        ids = {m["id"] for m in result}
+        assert "providers" in result
+        providers = result["providers"]
+        assert len(providers) == 3
+        ids = {m["id"] for m in providers}
         assert ids == {"gemini", "flux", "recraft"}
+
+        assert "identity_packs" in result
+        assert isinstance(result["identity_packs"], dict)
 
     @pytest.mark.anyio
     async def test_get_visual_presets_returns_presets(self):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mcp_bildsprache.presets import (
+    CASEY_COMPOSITION_CLAUSE,
     PLATFORM_SIZES,
     PRESETS,
     get_dimensions,
@@ -122,7 +123,20 @@ class TestRouteModelReferenceAware:
             assert route_model(**kwargs, has_references=False) == expected
 
 
-class TestPlatformSizes:
+class TestCompositionClause:
+    """Composition clause is defined in presets.py but gated by server.py
+    (only appended when an identity pack resolved to a non-empty list for
+    @casey.berlin). These tests exercise the gating via generate_image.
+    """
+
+    def test_clause_constant_content(self):
+        assert "face-to-camera" in CASEY_COMPOSITION_CLAUSE
+        assert "sole focal point" in CASEY_COMPOSITION_CLAUSE
+
+    def test_clause_not_in_base_preset(self):
+        # The clause is NOT hard-coded into the preset string — it's added
+        # at prompt-assembly time in server.py.
+        assert CASEY_COMPOSITION_CLAUSE not in PRESETS["casey.berlin"]
     EXPECTED_KEYS = [
         "linkedin-post", "linkedin-article", "linkedin-carousel",
         "instagram-feed", "instagram-story", "blog-hero",

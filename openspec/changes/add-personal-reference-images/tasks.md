@@ -56,19 +56,19 @@
 
 ## 8. `server.py` — tool surface & orchestration
 
-- [ ] 8.1 Add optional `reference_images: list[bytes] | None = None` and `include_dogs: bool | None = None` parameters to `generate_image`
-- [ ] 8.2 Between preset injection and provider dispatch: look up identity pack for the call's context; if caller supplied `reference_images`, use them directly; otherwise call `resolve_identity_for_call` and read files from disk
-- [ ] 8.3 Cache reference-image bytes after first read per process (module-level `dict[Path, bytes]`)
-- [ ] 8.4 Pass `has_references=bool(refs)` into `route_model` and `refs` into the chosen provider
-- [ ] 8.5 Prepend the composition clause to `enhanced_prompt` only when context is `@casey.berlin` and `resolve_identity` returned a non-empty list
-- [ ] 8.6 Emit the per-call structured log (`brand`, `slots`, `provider`, `has_include_dogs_override`)
-- [ ] 8.7 Extend `list_models` response with `identity_packs: dict[str, bool]`
-- [ ] 8.8 Extend `get_visual_presets` response with `identity_pack_loaded: bool` per brand
+- [x] 8.1 Add optional `reference_images: list[bytes] | None = None` and `include_dogs: bool | None = None` parameters to `generate_image`
+- [x] 8.2 Between preset injection and provider dispatch: look up identity pack for the call's context; if caller supplied `reference_images`, use them directly; otherwise call `resolve_identity_for_call` and read files from disk
+- [x] 8.3 Cache reference-image bytes after first read per process (module-level `dict[Path, bytes]`)
+- [x] 8.4 Pass `has_references=bool(refs)` into `route_model` and `refs` into the chosen provider
+- [x] 8.5 Prepend the composition clause to `enhanced_prompt` only when context is `@casey.berlin` and `resolve_identity` returned a non-empty list
+- [x] 8.6 Emit the per-call structured log (`brand`, `slots`, `provider`, `has_include_dogs_override`)
+- [x] 8.7 Extend `list_models` response with `identity_packs: dict[str, bool]`
+- [x] 8.8 Extend `get_visual_presets` response with `identity_pack_loaded: bool` per brand
 
 ## 9. Preset — @casey.berlin composition clause
 
-- [ ] 9.1 Add the compositional clause string to `PRESETS["@casey.berlin"]` in `presets.py` (embedded in the scene, never face-to-camera, never sole focal point in group shots)
-- [ ] 9.2 Ensure it's only appended when identity resolution produced a non-empty list (gated in `server.py`, not hard-coded into the preset)
+- [x] 9.1 Add the compositional clause string to `PRESETS["@casey.berlin"]` in `presets.py` (embedded in the scene, never face-to-camera, never sole focal point in group shots)
+- [x] 9.2 Ensure it's only appended when identity resolution produced a non-empty list (gated in `server.py`, not hard-coded into the preset)
 
 ## 10. HTTP hygiene — keep /data/identity off the public mount
 
