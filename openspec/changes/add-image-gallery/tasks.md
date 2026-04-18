@@ -83,8 +83,8 @@
 
 ## 11. Tests — frontend smoke
 
-- [ ] 11.1 Lightweight HTML/JS unit test (no browser) verifying the URL-query-string serializer round-trips filter state
-- [ ] 11.2 Pure-JS test for the ZIP filename derivation from entry path
+- [x] 11.1 Lightweight HTML/JS unit test (no browser) verifying the URL-query-string serializer round-trips filter state
+- [x] 11.2 Pure-JS test for the ZIP filename derivation from entry path
 
 ## 12. Docs
 
