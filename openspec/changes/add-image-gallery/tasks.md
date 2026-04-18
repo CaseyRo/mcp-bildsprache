@@ -73,13 +73,13 @@
 
 ## 10. Tests — backend
 
-- [ ] 10.1 `tests/test_gallery_index.py` — scanner builds entries from seeded `/data/images` tree; missing sidecar skipped; missing `platform` tolerated; mtime-fallback when `created_at` absent
-- [ ] 10.2 `tests/test_gallery_index.py` — filter cases: brand list, platform exact, date range, `q` substring case-insensitivity, dimension mins, all combinable
-- [ ] 10.3 `tests/test_gallery_index.py` — sort cases: default `created_desc`, `created_asc`, `cost_desc`, `size_desc`
-- [ ] 10.4 `tests/test_gallery_index.py` — pagination: offset/limit slicing; `limit=1000` clamped to 500
-- [ ] 10.5 `tests/test_gallery_api.py` — Starlette TestClient: all endpoints return expected shapes on a seeded tree
-- [ ] 10.6 `tests/test_gallery_api.py` — `POST /api/reindex` picks up a newly-written sidecar
-- [ ] 10.7 `tests/test_gallery_api.py` — `TailnetOnlyMiddleware`: public Host → 404 on `/gallery/*`, public Host → 200 on `/mcp`, Tailnet Host → 200 on `/gallery/`
+- [x] 10.1 `tests/test_gallery_index.py` — scanner builds entries from seeded `/data/images` tree; missing sidecar skipped; missing `platform` tolerated; mtime-fallback when `created_at` absent
+- [x] 10.2 `tests/test_gallery_index.py` — filter cases: brand list, platform exact, date range, `q` substring case-insensitivity, dimension mins, all combinable
+- [x] 10.3 `tests/test_gallery_index.py` — sort cases: default `created_desc`, `created_asc`, `cost_desc`, `size_desc`
+- [x] 10.4 `tests/test_gallery_index.py` — pagination: offset/limit slicing; `limit=1000` clamped to 500
+- [x] 10.5 `tests/test_gallery_api.py` — Starlette TestClient: all endpoints return expected shapes on a seeded tree
+- [x] 10.6 `tests/test_gallery_api.py` — `POST /api/reindex` picks up a newly-written sidecar
+- [x] 10.7 `tests/test_gallery_api.py` — `TailnetOnlyMiddleware`: public Host → 404 on `/gallery/*`, public Host → 200 on `/mcp`, Tailnet Host → 200 on `/gallery/`
 
 ## 11. Tests — frontend smoke
 
