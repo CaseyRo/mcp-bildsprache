@@ -90,6 +90,7 @@ def route_model(
     context: str | None = None,
     platform: str | None = None,
     model_hint: str | None = None,
+    has_references: bool = False,
 ) -> str:
     """Route to the optimal image generation provider.
 
@@ -97,9 +98,11 @@ def route_model(
     The provider itself handles model selection internally.
 
     Priority:
-    1. Explicit model_hint overrides everything
-    2. Vector/icon/illustration → Recraft V4 (unique SVG capability)
-    3. Everything else → FLUX (FLUX.2 Max by default)
+    1. Explicit model_hint overrides everything (including has_references)
+    2. When has_references=True, never auto-route to Recraft — reference
+       images would be silently dropped. Falls through to FLUX instead.
+    3. Vector/icon/illustration → Recraft V4 (unique SVG capability)
+    4. Everything else → FLUX (FLUX.2 Max by default)
     """
     if model_hint:
         # Allow both provider keys ("flux") and specific model IDs ("flux-2-max")
@@ -111,8 +114,9 @@ def route_model(
             return "gemini"
         raise ValueError(f"Unknown model: {model_hint}. Valid models: gemini, flux, flux-2-max, flux-2-pro, flux-kontext-pro, flux-pro-1.1, recraft")
 
-    # Recraft for vectors/icons — unique capability FLUX can't do
-    if platform:
+    # Recraft for vectors/icons — unique capability FLUX can't do.
+    # Skipped when references are present since Recraft would drop them.
+    if platform and not has_references:
         p = platform.lower()
         if any(kw in p for kw in ("icon", "svg", "vector", "logo", "illustration")):
             return "recraft"

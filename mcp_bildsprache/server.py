@@ -56,6 +56,16 @@ FALLBACKS = {
     "recraft": "gemini",
 }
 
+# When references are present we must not fall back to a text-only path.
+# Both flux and gemini are reference-capable; recraft is not and should
+# never be picked in this branch (and `route_model(has_references=True)`
+# prevents it from being auto-selected in the first place).
+REFERENCE_FALLBACKS = {
+    "flux": "gemini",
+    "gemini": "flux",
+    "recraft": "flux",
+}
+
 
 def _build_auth():
     """Build auth provider if running in HTTP mode."""

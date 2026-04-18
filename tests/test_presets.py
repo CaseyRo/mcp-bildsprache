@@ -90,6 +90,38 @@ class TestRouteModel:
         assert route_model() == "flux"
 
 
+class TestRouteModelReferenceAware:
+    def test_has_references_redirects_icon_to_flux(self):
+        assert route_model(platform="icon", has_references=True) == "flux"
+
+    def test_has_references_redirects_svg_logo_to_flux(self):
+        assert route_model(platform="svg-logo", has_references=True) == "flux"
+
+    def test_explicit_recraft_hint_respected_with_references(self):
+        assert route_model(
+            platform="icon", model_hint="recraft", has_references=True
+        ) == "recraft"
+
+    def test_non_vector_platform_still_flux_with_references(self):
+        assert route_model(platform="blog-hero", has_references=True) == "flux"
+
+    def test_non_reference_routing_unchanged(self):
+        """Every existing case should return the same thing with has_references=False."""
+        # These pairs must match the pre-change behaviour.
+        cases = [
+            ({"platform": "icon"}, "recraft"),
+            ({"platform": "svg-logo"}, "recraft"),
+            ({"platform": "blog-hero"}, "flux"),
+            ({"model_hint": "gemini"}, "gemini"),
+            ({"model_hint": "flux"}, "flux"),
+            ({"model_hint": "recraft"}, "recraft"),
+            ({}, "flux"),
+        ]
+        for kwargs, expected in cases:
+            assert route_model(**kwargs) == expected
+            assert route_model(**kwargs, has_references=False) == expected
+
+
 class TestPlatformSizes:
     EXPECTED_KEYS = [
         "linkedin-post", "linkedin-article", "linkedin-carousel",

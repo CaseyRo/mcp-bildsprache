@@ -49,10 +49,10 @@
 
 ## 7. Routing
 
-- [ ] 7.1 Extend `route_model(context, platform, model_hint, has_references=False)` in `presets.py`
-- [ ] 7.2 When `has_references=True` and an auto-route would land on Recraft (and `model_hint` isn't pinning Recraft), redirect to `flux`
-- [ ] 7.3 Update `FALLBACKS` map in `server.py` to branch on reference-bearing calls: `flux → gemini` (both reference-capable), `gemini → flux`
-- [ ] 7.4 Confirm non-reference routing is byte-for-byte unchanged against existing tests
+- [x] 7.1 Extend `route_model(context, platform, model_hint, has_references=False)` in `presets.py`
+- [x] 7.2 When `has_references=True` and an auto-route would land on Recraft (and `model_hint` isn't pinning Recraft), redirect to `flux`
+- [x] 7.3 Update `FALLBACKS` map in `server.py` to branch on reference-bearing calls: `flux → gemini` (both reference-capable), `gemini → flux`
+- [x] 7.4 Confirm non-reference routing is byte-for-byte unchanged against existing tests
 
 ## 8. `server.py` — tool surface & orchestration
 
@@ -83,7 +83,7 @@
 - [x] 11.4 `tests/test_providers.py` — Gemini: references become `inlineData` parts in order; unsupported mime raises pre-request; text-only unchanged
 - [x] 11.5 `tests/test_providers.py` — BFL: single ref → kontext-pro; multi-ref → collage → kontext-pro; kontext-pro fail → flux-2-pro with image_prompt; flux-2-max never called when refs present; cost/model reflect actual success
 - [x] 11.6 `tests/test_providers.py` — Recraft: log-and-drop, text-only request unchanged
-- [ ] 11.7 `tests/test_presets.py` — `route_model` reference-aware: Recraft auto-route redirected; explicit Recraft hint respected; non-reference routing byte-for-byte unchanged
+- [x] 11.7 `tests/test_presets.py` — `route_model` reference-aware: Recraft auto-route redirected; explicit Recraft hint respected; non-reference routing byte-for-byte unchanged
 - [ ] 11.8 `tests/test_presets.py` — composition clause: present for `@casey.berlin` personal prompt, absent for person-excluding prompt, absent for non-`@casey.berlin` contexts
 - [ ] 11.9 `tests/test_integration.py` — end-to-end `generate_image` happy path with a stubbed identity pack (mock provider HTTP), asserting the full log record and the final enhanced prompt
 - [ ] 11.10 `tests/test_integration.py` — regression test that no route resolves under `/data/identity/`
