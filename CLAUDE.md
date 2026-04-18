@@ -90,17 +90,10 @@ tool call
 ```
 
 Key invariants:
-<<<<<<< HEAD
-- **Provider layer is dumb**: it submits a prompt and returns raw bytes + metadata. All brand/sizing logic is upstream; all processing is downstream. Do not bake brand presets into providers.
-- **FLUX has its own internal fallback chain** (`flux-2-max → flux-2-pro → flux-pro-1.1`) inside `providers/bfl.py`, separate from the cross-provider `FALLBACKS` map in `server.py`. These compose: BFL retries within FLUX first, then server-level fallback hops to Gemini.
-- **FLUX dimension snapping**: each FLUX model has `snap` (grid) and `max_mp` constraints. The provider snaps before submission; the final pipeline re-crops to the caller's exact target dimensions. This means provider output dimensions often differ from the final output.
-- **Routing**: `route_model` defaults to FLUX for everything except vector-flavored platforms (icon/svg/logo/illustration keywords → Recraft). Gemini is never auto-selected — only via explicit `model_hint` or as a fallback.
-=======
 - **Provider layer is dumb**: it submits a prompt (plus optional `reference_images`) and returns raw bytes + metadata. All brand/sizing/identity logic is upstream; all processing is downstream. Do not bake brand presets into providers.
 - **FLUX has its own internal fallback chain** (`flux-2-max → flux-2-pro → flux-pro-1.1`) inside `providers/bfl.py`, separate from the cross-provider `FALLBACKS` map in `server.py`. These compose: BFL retries within FLUX first, then server-level fallback hops to Gemini. **When `reference_images` are present the chain switches to `flux-kontext-pro → flux-2-pro (image_prompt)` and `flux-2-max` is never attempted** — falling to a text-only model would silently lose the identity signal.
 - **FLUX dimension snapping**: each FLUX model has `snap` (grid) and `max_mp` constraints. The provider snaps before submission; the final pipeline re-crops to the caller's exact target dimensions. This means provider output dimensions often differ from the final output.
 - **Routing**: `route_model` defaults to FLUX for everything except vector-flavored platforms (icon/svg/logo/illustration keywords → Recraft). Gemini is never auto-selected — only via explicit `model_hint` or as a fallback. **When `has_references=True` the vector-platform override to Recraft is skipped** (Recraft would drop the refs); explicit `model_hint="recraft"` is still honoured.
->>>>>>> worktree-agent-a7250083
 
 ### Brand presets
 
@@ -110,8 +103,6 @@ Key invariants:
 
 `PLATFORM_SIZES` is the auto-sizing table. Adding a platform requires updating the `Platform` `Literal` in `server.py` too (it's duplicated; the `Literal` constrains MCP tool schemas).
 
-<<<<<<< HEAD
-=======
 ### Identity packs
 
 Brand presets handle *visual DNA* (palette, mood, composition). Identity packs handle *personal likeness* for brands where a specific person/subject appears on camera (`@casey.berlin`: Casey + his two Stabyhoun dogs, Fimme and Sien).
@@ -124,7 +115,6 @@ Identity packs live on the `identity-data` Docker volume, mounted **read-only** 
 - **`list_models`** returns `identity_packs: {brand: bool}`; `get_visual_presets(context=...)` returns `identity_pack_loaded: bool`.
 - **Static mount hygiene**: `_mount_static_files` mounts `image_storage_path` only — `/data/identity` is never exposed via `img.cdit-works.de`. A regression test enforces this.
 
->>>>>>> worktree-agent-a7250083
 ### Storage layout
 
 ```
@@ -142,7 +132,6 @@ Slug collisions (same prompt+dimensions+brand) get a 4-hex suffix derived from i
 
 In HTTP mode, `server.py::main()` calls `mcp.http_app(transport="http")` (FastMCP 3.2.x API) and then `_mount_static_files(app)` mounts `/data/images` at `/`. This is what makes hosted URLs like `https://img.cdit-works.de/cdit/foo-1200x630.webp` resolve. The `/mcp` path is reserved for the MCP protocol. `mimetypes.add_type("image/webp"/".avif")` is needed because `python:3.12-slim` does not register them by default (see commit `406df0c`).
 
-<<<<<<< HEAD
 #### Gallery (Tailnet-only)
 
 `server.py::_mount_gallery(app)` inserts a Starlette sub-app at `/gallery` **before** the root static mount, so the prefix wins routing. The sub-app's routes are:
@@ -159,15 +148,13 @@ Auth is hostname-based: `gallery/middleware.py::TailnetOnlyMiddleware` rejects `
 
 Bulk download is client-side: the frontend `fetch`es selected WebPs, feeds them to the vendored `fflate` (`gallery/static/fflate.min.js`, version pinned — see the neighboring `README.md` for SHA-256), and triggers a single Blob URL download. This is what makes it work on iOS Safari.
 
-=======
->>>>>>> worktree-agent-a7250083
 ### Auth (HTTP mode only)
 
 `auth.py::create_auth` returns a `MultiAuth` composed of:
 - **OIDCProxy** for Keycloak (realm `cdit-mcp`, audience `mcp-bildsprache`) — this is the path Claude.ai connectors take. No DCR; credentials are pre-registered.
 - **BearerTokenVerifier** for a static API key prefixed `bmcp_` — used by Claude Code, n8n, scripts.
 
-If `KEYCLOAK_CLIENT_SECRET` is unset, auth is disabled and a warning is logged. If `MCP_BILDSPRACHE_API_KEY` is unset, a key is auto-generated at boot and logged once (dev convenience — set the env var in prod).
+Auth in HTTP mode is **fail-fast** (see commit `c637e42`): `_build_auth()` reads `MCP_API_KEY` (fleet standard) with fallback to `MCP_BILDSPRACHE_API_KEY` and raises `SystemExit` if neither is set, rather than silently running unauthenticated. If `KEYCLOAK_CLIENT_SECRET` is set, the server returns the full `MultiAuth` (Keycloak + bearer); if only the API key is set, the server returns a `BearerTokenVerifier` alone (the current production shape post-Keycloak-decommission).
 
 Stdio mode skips auth entirely.
 

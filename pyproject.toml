@@ -1,7 +1,7 @@
 [project]
 name = "mcp-bildsprache"
 version = "0.3.6"
-description = "MCP server for brand-aware image generation — Gemini, FLUX.2 Pro, Recraft V3"
+description = "MCP server for brand-aware image generation — Gemini, FLUX.2 Pro, Recraft V4"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

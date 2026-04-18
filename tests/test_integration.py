@@ -74,7 +74,7 @@ class TestGenerateImageHosting:
     async def test_always_returns_hosted_url(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -145,7 +145,7 @@ class TestProviderFallback:
         providers = {"flux": failing_mock, "gemini": success_mock, "recraft": success_mock}
 
         with patch("mcp_bildsprache.server.PROVIDERS", providers), \
-             patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.server.settings"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -163,7 +163,7 @@ class TestProviderFallback:
         """StorageError should propagate — no base64 fallback."""
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings"), \
              patch("mcp_bildsprache.server.store_image", side_effect=StorageError("disk full")):
             with pytest.raises(StorageError, match="disk full"):
                 await generate_image(prompt="test storage fail", dimensions="512x512")
@@ -174,7 +174,7 @@ class TestDimensionHandling:
     async def test_explicit_dimensions_override_platform(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -195,7 +195,7 @@ class TestDimensionHandling:
     async def test_default_dimensions_1200x1200(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"

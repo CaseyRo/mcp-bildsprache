@@ -1,6 +1,6 @@
 # mcp-bildsprache
 
-MCP server for brand-aware image generation. Routes to Gemini, FLUX.2 Pro, or Recraft V3 based on brand context and content type.
+MCP server for brand-aware image generation. Routes to Gemini, FLUX.2 Pro, or Recraft V4 based on brand context and content type.
 
 ## Quick Start
 
@@ -26,7 +26,7 @@ docker compose up --build
 - `list_models` — Available models and their capabilities. Also reports
   `identity_packs: {brand: bool}` so callers can see which brands have
   an identity pack loaded.
-- `get_brand_presets` — Brand visual presets for each context. Per-brand
+- `get_visual_presets` — Brand visual presets for each context. Per-brand
   responses include `identity_pack_loaded: bool`.
 
 ## Identity packs
