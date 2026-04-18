@@ -23,18 +23,18 @@
 
 ## 4. Starlette sub-app
 
-- [ ] 4.1 In `gallery/app.py`, build a Starlette `Router` with: `GET /` (HTML shell), `GET /static/{path:path}` (static files), `GET /api/images`, `GET /api/images/{path:path}`, `POST /api/reindex`
-- [ ] 4.2 Implement HTML-shell handler that returns `gallery/static/index.html`
-- [ ] 4.3 Implement `GET /api/images` handler parsing query params, calling `index.filter_and_sort`, returning `{total, limit, offset, items}`
-- [ ] 4.4 Implement `GET /api/images/{path}` handler returning 404 on miss
-- [ ] 4.5 Implement `POST /api/reindex` handler performing synchronous refresh and returning `{total}`
-- [ ] 4.6 Wire Starlette `Lifespan`: first scan synchronously, then spawn reindex task; cancel on shutdown
+- [x] 4.1 In `gallery/app.py`, build a Starlette `Router` with: `GET /` (HTML shell), `GET /static/{path:path}` (static files), `GET /api/images`, `GET /api/images/{path:path}`, `POST /api/reindex`
+- [x] 4.2 Implement HTML-shell handler that returns `gallery/static/index.html`
+- [x] 4.3 Implement `GET /api/images` handler parsing query params, calling `index.filter_and_sort`, returning `{total, limit, offset, items}`
+- [x] 4.4 Implement `GET /api/images/{path}` handler returning 404 on miss
+- [x] 4.5 Implement `POST /api/reindex` handler performing synchronous refresh and returning `{total}`
+- [x] 4.6 Wire Starlette `Lifespan`: first scan synchronously, then spawn reindex task; cancel on shutdown
 
 ## 5. Tailnet-only middleware
 
-- [ ] 5.1 Implement `TailnetOnlyMiddleware` in `gallery/middleware.py`: rejects `/gallery/*` requests whose `Host` header doesn't match the configured Tailnet hostname
-- [ ] 5.2 Configurable: if `gallery_tailnet_hostname` is unset, middleware is a no-op (dev convenience) and logs a single startup WARN
-- [ ] 5.3 Rejection response is `HTTP 404` (not 403) to avoid advertising existence
+- [x] 5.1 Implement `TailnetOnlyMiddleware` in `gallery/middleware.py`: rejects `/gallery/*` requests whose `Host` header doesn't match the configured Tailnet hostname
+- [x] 5.2 Configurable: if `gallery_tailnet_hostname` is unset, middleware is a no-op (dev convenience) and logs a single startup WARN
+- [x] 5.3 Rejection response is `HTTP 404` (not 403) to avoid advertising existence
 
 ## 6. Mount into the existing HTTP app
 
