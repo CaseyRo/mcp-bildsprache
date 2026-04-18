@@ -34,13 +34,13 @@
 
 ## 5. Provider — BFL/FLUX reference support
 
-- [ ] 5.1 Extend `generate_bfl` signature with `reference_images: list[bytes] | None = None`
-- [ ] 5.2 Implement reference-bearing fallback chain: `flux-kontext-pro → flux-2-pro (image_prompt) → Gemini` (the last hop is handled in `server.py`'s `FALLBACKS` map, not here)
-- [ ] 5.3 Ensure `flux-2-max` is **not** attempted when `reference_images` is non-empty
-- [ ] 5.4 Implement `_collage(images: list[bytes]) -> bytes` that builds a 1×N horizontal grid with Pillow when >1 reference is supplied for a single-input model
-- [ ] 5.5 Send base64-encoded `input_image` on the kontext-pro request and `image_prompt` on the flux-2-pro request
-- [ ] 5.6 Update `ProviderResult.cost_estimate` and `.model` to reflect the model that actually succeeded
-- [ ] 5.7 Log collage events with source count and dimensions
+- [x] 5.1 Extend `generate_bfl` signature with `reference_images: list[bytes] | None = None`
+- [x] 5.2 Implement reference-bearing fallback chain: `flux-kontext-pro → flux-2-pro (image_prompt) → Gemini` (the last hop is handled in `server.py`'s `FALLBACKS` map, not here)
+- [x] 5.3 Ensure `flux-2-max` is **not** attempted when `reference_images` is non-empty
+- [x] 5.4 Implement `_collage(images: list[bytes]) -> bytes` that builds a 1×N horizontal grid with Pillow when >1 reference is supplied for a single-input model
+- [x] 5.5 Send base64-encoded `input_image` on the kontext-pro request and `image_prompt` on the flux-2-pro request
+- [x] 5.6 Update `ProviderResult.cost_estimate` and `.model` to reflect the model that actually succeeded
+- [x] 5.7 Log collage events with source count and dimensions
 
 ## 6. Provider — Recraft log-and-drop
 
@@ -81,7 +81,7 @@
 - [x] 11.2 `tests/test_identity.py` — `resolve_identity` cases: personal prompt → casey only; outdoor prompt → casey+dogs; client prompt → casey only (exclude wins); person-excluding marker → empty; deterministic order
 - [x] 11.3 `tests/test_identity.py` — `include_dogs=True/False/None` override semantics
 - [x] 11.4 `tests/test_providers.py` — Gemini: references become `inlineData` parts in order; unsupported mime raises pre-request; text-only unchanged
-- [ ] 11.5 `tests/test_providers.py` — BFL: single ref → kontext-pro; multi-ref → collage → kontext-pro; kontext-pro fail → flux-2-pro with image_prompt; flux-2-max never called when refs present; cost/model reflect actual success
+- [x] 11.5 `tests/test_providers.py` — BFL: single ref → kontext-pro; multi-ref → collage → kontext-pro; kontext-pro fail → flux-2-pro with image_prompt; flux-2-max never called when refs present; cost/model reflect actual success
 - [ ] 11.6 `tests/test_providers.py` — Recraft: log-and-drop, text-only request unchanged
 - [ ] 11.7 `tests/test_presets.py` — `route_model` reference-aware: Recraft auto-route redirected; explicit Recraft hint respected; non-reference routing byte-for-byte unchanged
 - [ ] 11.8 `tests/test_presets.py` — composition clause: present for `@casey.berlin` personal prompt, absent for person-excluding prompt, absent for non-`@casey.berlin` contexts
