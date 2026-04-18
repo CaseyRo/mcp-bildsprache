@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     keycloak_client_id: str = "mcp-bildsprache"
     keycloak_client_secret: str = ""
 
+    # Gallery (Tailnet-only browse/download UI)
+    gallery_enabled: bool = True
+    gallery_reindex_interval_seconds: int = 300
+    gallery_tailnet_hostname: str | None = None
+    gallery_soft_zip_cap_mb: int = 250
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
     def model_post_init(self, __context: Any) -> None:
