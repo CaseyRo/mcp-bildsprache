@@ -410,6 +410,54 @@ class TestRecraftProvider:
         assert "recraft" in result.model
 
 
+class TestRecraftReferences:
+    @pytest.mark.anyio
+    async def test_refs_are_dropped_with_info_log_and_text_only_request(
+        self, httpx_mock, caplog
+    ):
+        import json as _json
+        import logging
+
+        from mcp_bildsprache.providers.recraft import generate_recraft
+
+        png_bytes = _fake_png_bytes()
+
+        httpx_mock.add_response(
+            url="https://external.api.recraft.ai/v1/images/generations",
+            json={"data": [{"url": "https://example.com/recraft.png"}]},
+        )
+        httpx_mock.add_response(
+            url="https://example.com/recraft.png",
+            content=png_bytes,
+            headers={"content-type": "image/png"},
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("RECRAFT_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            test_settings = Settings()
+            mp.setattr("mcp_bildsprache.providers.recraft.settings", test_settings)
+
+            with caplog.at_level(logging.INFO, logger="mcp_bildsprache.providers.recraft"):
+                result = await generate_recraft(
+                    "test", 1024, 1024, reference_images=[png_bytes, png_bytes]
+                )
+
+        # Exactly one INFO log naming the drop + count.
+        drop_records = [r for r in caplog.records
+                        if "dropped 2 reference image(s)" in r.message]
+        assert len(drop_records) == 1
+
+        # The outbound request must be text-only (no input_image / image_prompt).
+        submit = httpx_mock.get_requests()[0]
+        body = _json.loads(submit.content)
+        assert "input_image" not in body
+        assert "image_prompt" not in body
+        assert "reference_images" not in body
+
+        assert result.model == "recraft-v4"
+
+
 class TestBflProviderErrors:
     @pytest.mark.anyio
     async def test_no_api_key_raises(self):

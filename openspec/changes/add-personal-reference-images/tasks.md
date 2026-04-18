@@ -44,8 +44,8 @@
 
 ## 6. Provider — Recraft log-and-drop
 
-- [ ] 6.1 Extend `generate_recraft` signature with `reference_images: list[bytes] | None = None`
-- [ ] 6.2 When non-empty, emit a single `INFO` log (`recraft: dropped N reference image(s) — provider does not support references`) and proceed with the text-only request unchanged
+- [x] 6.1 Extend `generate_recraft` signature with `reference_images: list[bytes] | None = None`
+- [x] 6.2 When non-empty, emit a single `INFO` log (`recraft: dropped N reference image(s) — provider does not support references`) and proceed with the text-only request unchanged
 
 ## 7. Routing
 
@@ -82,7 +82,7 @@
 - [x] 11.3 `tests/test_identity.py` — `include_dogs=True/False/None` override semantics
 - [x] 11.4 `tests/test_providers.py` — Gemini: references become `inlineData` parts in order; unsupported mime raises pre-request; text-only unchanged
 - [x] 11.5 `tests/test_providers.py` — BFL: single ref → kontext-pro; multi-ref → collage → kontext-pro; kontext-pro fail → flux-2-pro with image_prompt; flux-2-max never called when refs present; cost/model reflect actual success
-- [ ] 11.6 `tests/test_providers.py` — Recraft: log-and-drop, text-only request unchanged
+- [x] 11.6 `tests/test_providers.py` — Recraft: log-and-drop, text-only request unchanged
 - [ ] 11.7 `tests/test_presets.py` — `route_model` reference-aware: Recraft auto-route redirected; explicit Recraft hint respected; non-reference routing byte-for-byte unchanged
 - [ ] 11.8 `tests/test_presets.py` — composition clause: present for `@casey.berlin` personal prompt, absent for person-excluding prompt, absent for non-`@casey.berlin` contexts
 - [ ] 11.9 `tests/test_integration.py` — end-to-end `generate_image` happy path with a stubbed identity pack (mock provider HTTP), asserting the full log record and the final enhanced prompt
