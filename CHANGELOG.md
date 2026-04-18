@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.8] - 2026-04-18
+
+- infra: add docktail labels and gallery/identity env vars to compose
+
+
 ## [0.3.7] - 2026-04-18
 
 - chore: resolve merge conflicts and clean up post-parallel-build state
