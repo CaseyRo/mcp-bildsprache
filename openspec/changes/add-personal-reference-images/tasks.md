@@ -27,10 +27,10 @@
 
 ## 4. Provider — Gemini reference support
 
-- [ ] 4.1 Extend `generate_gemini` signature with `reference_images: list[bytes] | None = None`
-- [ ] 4.2 When non-empty: probe each bytes blob for mime type (Pillow) and append an `inlineData` part to `contents[0].parts` in list order
-- [ ] 4.3 Raise `ValueError` naming the offending list index when a blob's mime can't be determined
-- [ ] 4.4 Preserve text-only request shape when `reference_images` is `None` or empty
+- [x] 4.1 Extend `generate_gemini` signature with `reference_images: list[bytes] | None = None`
+- [x] 4.2 When non-empty: probe each bytes blob for mime type (Pillow) and append an `inlineData` part to `contents[0].parts` in list order
+- [x] 4.3 Raise `ValueError` naming the offending list index when a blob's mime can't be determined
+- [x] 4.4 Preserve text-only request shape when `reference_images` is `None` or empty
 
 ## 5. Provider — BFL/FLUX reference support
 
@@ -80,7 +80,7 @@
 - [x] 11.1 `tests/test_identity.py` — manifest loader: valid / missing dir / missing manifest / malformed JSON / missing image files (one case each)
 - [x] 11.2 `tests/test_identity.py` — `resolve_identity` cases: personal prompt → casey only; outdoor prompt → casey+dogs; client prompt → casey only (exclude wins); person-excluding marker → empty; deterministic order
 - [x] 11.3 `tests/test_identity.py` — `include_dogs=True/False/None` override semantics
-- [ ] 11.4 `tests/test_providers.py` — Gemini: references become `inlineData` parts in order; unsupported mime raises pre-request; text-only unchanged
+- [x] 11.4 `tests/test_providers.py` — Gemini: references become `inlineData` parts in order; unsupported mime raises pre-request; text-only unchanged
 - [ ] 11.5 `tests/test_providers.py` — BFL: single ref → kontext-pro; multi-ref → collage → kontext-pro; kontext-pro fail → flux-2-pro with image_prompt; flux-2-max never called when refs present; cost/model reflect actual success
 - [ ] 11.6 `tests/test_providers.py` — Recraft: log-and-drop, text-only request unchanged
 - [ ] 11.7 `tests/test_presets.py` — `route_model` reference-aware: Recraft auto-route redirected; explicit Recraft hint respected; non-reference routing byte-for-byte unchanged

@@ -21,6 +21,12 @@ def _fake_jpeg_bytes(width: int = 512, height: int = 512) -> bytes:
     return buf.getvalue()
 
 
+def _fake_webp_bytes(width: int = 256, height: int = 256) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), color=(50, 100, 150)).save(buf, format="WEBP")
+    return buf.getvalue()
+
+
 class TestBflProvider:
     @pytest.mark.anyio
     async def test_returns_provider_result(self, httpx_mock):
@@ -93,6 +99,112 @@ class TestGeminiProvider:
         assert result.image_data == png_bytes
         assert result.mime_type == "image/png"
         assert "gemini" in result.model
+
+
+class TestGeminiReferences:
+    @pytest.mark.anyio
+    async def test_references_become_inline_data_parts_in_order(self, httpx_mock):
+        import base64 as b64mod
+
+        from mcp_bildsprache.providers.gemini import generate_gemini
+
+        png_bytes = _fake_png_bytes()
+        b64 = b64mod.b64encode(png_bytes).decode()
+
+        httpx_mock.add_response(
+            json={
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "inlineData": {"data": b64, "mimeType": "image/png"}
+                        }]
+                    }
+                }]
+            },
+        )
+
+        ref_a = _fake_png_bytes(64, 64)
+        ref_b = _fake_webp_bytes(64, 64)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            test_settings = Settings()
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", test_settings)
+
+            result = await generate_gemini(
+                "test prompt", 512, 512, reference_images=[ref_a, ref_b]
+            )
+
+        assert isinstance(result, ProviderResult)
+
+        # Inspect the outbound request payload.
+        request = httpx_mock.get_request()
+        import json as _json
+        body = _json.loads(request.content)
+        parts = body["contents"][0]["parts"]
+        assert len(parts) == 3
+        assert "text" in parts[0]
+        assert parts[1]["inlineData"]["mimeType"] == "image/png"
+        assert parts[1]["inlineData"]["data"] == b64mod.b64encode(ref_a).decode("ascii")
+        assert parts[2]["inlineData"]["mimeType"] == "image/webp"
+        assert parts[2]["inlineData"]["data"] == b64mod.b64encode(ref_b).decode("ascii")
+
+    @pytest.mark.anyio
+    async def test_unsupported_mime_raises_valueerror_pre_request(self, httpx_mock):
+        from mcp_bildsprache.providers.gemini import generate_gemini
+
+        bogus_bytes = b"this is not an image"
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            test_settings = Settings()
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", test_settings)
+
+            with pytest.raises(ValueError, match=r"reference_images\[0\]"):
+                await generate_gemini(
+                    "test prompt", 512, 512, reference_images=[bogus_bytes]
+                )
+
+        # No HTTP request should have been made.
+        assert len(httpx_mock.get_requests()) == 0
+
+    @pytest.mark.anyio
+    async def test_none_behaves_unchanged(self, httpx_mock):
+        """Passing reference_images=None should match the text-only code path byte-for-byte."""
+        import base64 as b64mod
+        import json as _json
+
+        from mcp_bildsprache.providers.gemini import generate_gemini
+
+        png_bytes = _fake_png_bytes()
+        b64 = b64mod.b64encode(png_bytes).decode()
+
+        httpx_mock.add_response(
+            json={
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "inlineData": {"data": b64, "mimeType": "image/png"}
+                        }]
+                    }
+                }]
+            },
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            test_settings = Settings()
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", test_settings)
+
+            await generate_gemini("test prompt", 512, 512)
+
+        body = _json.loads(httpx_mock.get_request().content)
+        parts = body["contents"][0]["parts"]
+        assert len(parts) == 1
+        assert "text" in parts[0]
 
 
 class TestRecraftProvider:
