@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.5] - 2026-04-18
+
+- fix(auth): enable bearer auth without Keycloak dependency
+
+
 ## [0.3.4] - 2026-04-10
 
 - fix: register webp/avif mime types for correct Content-Type headers
