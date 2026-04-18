@@ -90,10 +90,10 @@
 
 ## 12. Docs
 
-- [ ] 12.1 Update `CLAUDE.md` "Request flow" block to show the new identity-resolution step between preset injection and provider dispatch
-- [ ] 12.2 Update `CLAUDE.md` FLUX fallback-chain paragraph to note the reference-aware variant (`flux-kontext-pro → flux-2-pro → gemini`) and that `flux-2-max` is skipped for reference-bearing calls
-- [ ] 12.3 Add a short "Identity packs" subsection under "Brand presets" in `CLAUDE.md` pointing at `/data/identity/` and `docs/identity/README.md`
-- [ ] 12.4 Cross-link the new MCP tool parameters (`reference_images`, `include_dogs`) in README tool list
+- [x] 12.1 Update `CLAUDE.md` "Request flow" block to show the new identity-resolution step between preset injection and provider dispatch
+- [x] 12.2 Update `CLAUDE.md` FLUX fallback-chain paragraph to note the reference-aware variant (`flux-kontext-pro → flux-2-pro → gemini`) and that `flux-2-max` is skipped for reference-bearing calls
+- [x] 12.3 Add a short "Identity packs" subsection under "Brand presets" in `CLAUDE.md` pointing at `/data/identity/` and `docs/identity/README.md`
+- [x] 12.4 Cross-link the new MCP tool parameters (`reference_images`, `include_dogs`) in README tool list
 
 ## 13. Deploy
 

@@ -71,11 +71,18 @@ Implication: **do not hand-bump the version** in `pyproject.toml` — CI owns it
 
 ```
 tool call
-  → route_model(context, platform, model_hint)  [presets.py]    # picks "flux"|"gemini"|"recraft"
+  → get_pack_for_context(context)               [identity.py]   # loaded at startup
+  → resolve_identity_for_call(pack, prompt,
+      include_dogs)                             [identity.py]   # [] if person-excluding
+  → read reference bytes (cached per process)   [server.py]
+  → route_model(context, platform, model_hint,
+      has_references=bool(refs))                [presets.py]    # picks "flux"|"gemini"|"recraft"
   → get_dimensions(platform) or explicit WxH    [presets.py]
-  → get_preset(context) + prompt + mood         [presets.py]    # enhanced_prompt string
-  → PROVIDERS[key](enhanced_prompt, w, h)       [providers/*]   # returns ProviderResult(bytes, mime, model, cost)
-      └── on Exception → FALLBACKS[key] provider (one retry, different provider)
+  → get_preset(context) + [composition clause if @casey.berlin + refs]
+    + prompt + mood                             [presets.py]    # enhanced_prompt string
+  → PROVIDERS[key](enhanced_prompt, w, h,
+      reference_images=refs)                    [providers/*]   # returns ProviderResult(bytes, mime, model, cost)
+      └── on Exception → (REFERENCE_FALLBACKS if refs else FALLBACKS)[key] provider
   → process_image(...)                          [pipeline.py]   # resize+crop (ImageOps.fit) → WebP → EXIF
   → store_image(...)                            [storage.py]    # writes /data/images/<brand>/<slug>.webp + .json sidecar
   → (optional) store_raw_image(...)             [storage.py]    # provider-original bytes, "-raw" suffix
@@ -83,10 +90,10 @@ tool call
 ```
 
 Key invariants:
-- **Provider layer is dumb**: it submits a prompt and returns raw bytes + metadata. All brand/sizing logic is upstream; all processing is downstream. Do not bake brand presets into providers.
-- **FLUX has its own internal fallback chain** (`flux-2-max → flux-2-pro → flux-pro-1.1`) inside `providers/bfl.py`, separate from the cross-provider `FALLBACKS` map in `server.py`. These compose: BFL retries within FLUX first, then server-level fallback hops to Gemini.
+- **Provider layer is dumb**: it submits a prompt (plus optional `reference_images`) and returns raw bytes + metadata. All brand/sizing/identity logic is upstream; all processing is downstream. Do not bake brand presets into providers.
+- **FLUX has its own internal fallback chain** (`flux-2-max → flux-2-pro → flux-pro-1.1`) inside `providers/bfl.py`, separate from the cross-provider `FALLBACKS` map in `server.py`. These compose: BFL retries within FLUX first, then server-level fallback hops to Gemini. **When `reference_images` are present the chain switches to `flux-kontext-pro → flux-2-pro (image_prompt)` and `flux-2-max` is never attempted** — falling to a text-only model would silently lose the identity signal.
 - **FLUX dimension snapping**: each FLUX model has `snap` (grid) and `max_mp` constraints. The provider snaps before submission; the final pipeline re-crops to the caller's exact target dimensions. This means provider output dimensions often differ from the final output.
-- **Routing**: `route_model` defaults to FLUX for everything except vector-flavored platforms (icon/svg/logo/illustration keywords → Recraft). Gemini is never auto-selected — only via explicit `model_hint` or as a fallback.
+- **Routing**: `route_model` defaults to FLUX for everything except vector-flavored platforms (icon/svg/logo/illustration keywords → Recraft). Gemini is never auto-selected — only via explicit `model_hint` or as a fallback. **When `has_references=True` the vector-platform override to Recraft is skipped** (Recraft would drop the refs); explicit `model_hint="recraft"` is still honoured.
 
 ### Brand presets
 
@@ -95,6 +102,18 @@ Key invariants:
 `slugs.py::BRAND_PREFIXES` maps the same contexts to URL-path directories (e.g. `casey.berlin → casey-berlin/`). Unknown context → `gen/`. Keep these two maps in sync when adding a brand.
 
 `PLATFORM_SIZES` is the auto-sizing table. Adding a platform requires updating the `Platform` `Literal` in `server.py` too (it's duplicated; the `Literal` constrains MCP tool schemas).
+
+### Identity packs
+
+Brand presets handle *visual DNA* (palette, mood, composition). Identity packs handle *personal likeness* for brands where a specific person/subject appears on camera (`@casey.berlin`: Casey + his two Stabyhoun dogs, Fimme and Sien).
+
+Identity packs live on the `identity-data` Docker volume, mounted **read-only** at `/data/identity/<brand-dir>/`. Each brand has its own `manifest.json` plus reference images. Nothing identity-related is committed to this repo — see `docs/identity/README.md` for the volume contract and `docs/identity/manifest.example.json` for the schema.
+
+- **Loader**: `mcp_bildsprache/identity.py::load_identity_packs` runs at server startup, caches packs in a module-level dict. Missing/malformed manifests → WARN once, server keeps running with text-only prompts.
+- **Resolver**: `resolve_identity_for_call(pack, prompt, include_dogs)` returns a deterministic list of reference-image paths (manifest declaration order). Person-excluding markers (`"icon"`, `"flat illustration"`, `"abstract pattern"`, `"logo"`, `"architectural detail"`, `"svg"`) short-circuit to `[]`.
+- **Composition clause**: `presets.py::CASEY_COMPOSITION_CLAUSE` is prepended to the enhanced prompt *only* when the identity pack resolves to a non-empty list for `@casey.berlin`. The gating lives in `server.py` so person-excluding prompts stay clean.
+- **`list_models`** returns `identity_packs: {brand: bool}`; `get_visual_presets(context=...)` returns `identity_pack_loaded: bool`.
+- **Static mount hygiene**: `_mount_static_files` mounts `image_storage_path` only — `/data/identity` is never exposed via `img.cdit-works.de`. A regression test enforces this.
 
 ### Storage layout
 
