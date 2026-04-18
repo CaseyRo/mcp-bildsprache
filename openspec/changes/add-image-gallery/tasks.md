@@ -88,9 +88,9 @@
 
 ## 12. Docs
 
-- [ ] 12.1 Add a "Gallery" subsection under "HTTP serving" in `CLAUDE.md` describing the sub-app mount, auth model, reindex cadence, and that it is Tailnet-only
-- [ ] 12.2 Update README with a one-liner pointing at the internal Tailnet URL and noting the `/mcp` + public image routes are unchanged
-- [ ] 12.3 Note the vendored `fflate` version + checksum in `gallery/static/README.md`
+- [x] 12.1 Add a "Gallery" subsection under "HTTP serving" in `CLAUDE.md` describing the sub-app mount, auth model, reindex cadence, and that it is Tailnet-only
+- [x] 12.2 Update README with a one-liner pointing at the internal Tailnet URL and noting the `/mcp` + public image routes are unchanged
+- [x] 12.3 Note the vendored `fflate` version + checksum in `gallery/static/README.md`
 
 ## 13. Deploy
 

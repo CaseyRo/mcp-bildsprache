@@ -25,3 +25,10 @@ docker compose up --build
 Dual auth via MultiAuth:
 - **Keycloak JWT** for Claude.ai connectors
 - **Bearer token** (`bmcp_` prefix) for Claude Code, n8n, scripts
+
+## Gallery (Tailnet-only)
+
+Browse every generated image, filter/search, and download in bulk at the
+internal gallery hostname (e.g. `https://bildsprache-gallery.<tailnet>.ts.net/gallery/`).
+The public `/mcp` endpoint and `https://img.cdit-works.de/<brand>/*.webp`
+static routes are unchanged. See `CLAUDE.md` → *Gallery* for details.
