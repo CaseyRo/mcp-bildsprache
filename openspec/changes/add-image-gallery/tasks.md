@@ -1,0 +1,106 @@
+## 1. Package scaffold
+
+- [x] 1.1 Create `mcp_bildsprache/gallery/__init__.py` (package marker)
+- [x] 1.2 Create empty `mcp_bildsprache/gallery/app.py`, `index.py`, `middleware.py`
+- [x] 1.3 Create `mcp_bildsprache/gallery/static/` directory; add `.gitkeep`
+- [x] 1.4 Add gallery settings to `mcp_bildsprache/config.py`: `gallery_enabled: bool = True`, `gallery_reindex_interval_seconds: int = 300`, `gallery_tailnet_hostname: str | None = None`, `gallery_soft_zip_cap_mb: int = 250`
+
+## 2. Index (sidecar scanner)
+
+- [x] 2.1 Define `GalleryEntry` dataclass in `gallery/index.py` with all fields from the design doc (path, hosted_url, brand, prompt, prompt_lower, model, cost_estimate, width, height, platform, file_size, created_at)
+- [x] 2.2 Implement `scan_index(data_dir: Path, public_base_url: str) -> list[GalleryEntry]` — walk `<data_dir>/**/*.json`, parse each sidecar, build entries, tolerate missing optional fields, skip WebPs without sidecars
+- [x] 2.3 Derive `brand` from the top-level dir under `data_dir`
+- [x] 2.4 Derive `created_at` from sidecar `created_at` if present, else `Path.stat().st_mtime`
+- [x] 2.5 Implement `GalleryIndex` class holding the entry list + path-keyed dict, with `refresh()`, `total()`, `get(path)`, and `filter_and_sort(**query)` methods
+- [x] 2.6 Implement filtering: `brand` (list), `platform` (exact), `from`/`to` (ISO-8601 → datetime), `q` (substring over `prompt_lower`), `min_width`, `min_height`
+- [x] 2.7 Implement sorting: `created_desc` (default), `created_asc`, `cost_desc`, `size_desc`
+- [x] 2.8 Implement pagination: `limit` (default 100, max 500), `offset` (default 0)
+
+## 3. Background reindex loop
+
+- [x] 3.1 Implement `async def _reindex_loop(index, interval_s)` in `gallery/index.py`
+- [x] 3.2 Log `INFO` on each successful reindex with count + duration; `WARN` on failures without crashing the loop
+
+## 4. Starlette sub-app
+
+- [x] 4.1 In `gallery/app.py`, build a Starlette `Router` with: `GET /` (HTML shell), `GET /static/{path:path}` (static files), `GET /api/images`, `GET /api/images/{path:path}`, `POST /api/reindex`
+- [x] 4.2 Implement HTML-shell handler that returns `gallery/static/index.html`
+- [x] 4.3 Implement `GET /api/images` handler parsing query params, calling `index.filter_and_sort`, returning `{total, limit, offset, items}`
+- [x] 4.4 Implement `GET /api/images/{path}` handler returning 404 on miss
+- [x] 4.5 Implement `POST /api/reindex` handler performing synchronous refresh and returning `{total}`
+- [x] 4.6 Wire Starlette `Lifespan`: first scan synchronously, then spawn reindex task; cancel on shutdown
+
+## 5. Tailnet-only middleware
+
+- [x] 5.1 Implement `TailnetOnlyMiddleware` in `gallery/middleware.py`: rejects `/gallery/*` requests whose `Host` header doesn't match the configured Tailnet hostname
+- [x] 5.2 Configurable: if `gallery_tailnet_hostname` is unset, middleware is a no-op (dev convenience) and logs a single startup WARN
+- [x] 5.3 Rejection response is `HTTP 404` (not 403) to avoid advertising existence
+
+## 6. Mount into the existing HTTP app
+
+- [x] 6.1 In `server.py::main()`, after `mcp.http_app(transport="http")` returns the ASGI app, mount the gallery sub-app at `/gallery` if `settings.gallery_enabled`
+- [x] 6.2 Install `TailnetOnlyMiddleware` on the parent app so it fires for any `/gallery/*` path
+- [x] 6.3 Confirm ordering: static `/data/images` stays mounted at `/`, `/mcp` still routes to FastMCP, `/gallery` is new
+
+## 7. Frontend — static assets
+
+- [x] 7.1 Vendor `fflate.min.js` into `gallery/static/` (pinned version, checksum noted in a neighboring `README.md`)
+- [x] 7.2 Write `gallery/static/index.html` — single page with filter bar, view toggle, selection counter, download button, grid/list region
+- [x] 7.3 Write `gallery/static/styles.css` — grid + list layouts, filter bar, selection highlight, disabled-button state; CSS custom properties for theme tokens
+- [x] 7.4 Write `gallery/static/app.js` — `GalleryState` object, URL-query-string sync, debounced search input (≤250 ms), API fetch, render
+- [x] 7.5 Implement grid view rendering with `loading="lazy"` and `decoding="async"` on each `<img>`
+- [x] 7.6 Implement list view rendering: table with columns prompt / brand / date / dimensions / model / cost
+- [x] 7.7 Render missing optional fields as em-dash (`—`)
+
+## 8. Frontend — selection & keyboard shortcuts
+
+- [x] 8.1 Implement click-to-toggle selection
+- [x] 8.2 Implement shift-click range selection (A → B in rendered order)
+- [x] 8.3 Implement `a` shortcut: select all currently visible (rendered) items
+- [x] 8.4 Implement `esc` shortcut: clear selection
+- [x] 8.5 Implement `g` / `l` shortcuts: switch view
+- [x] 8.6 Implement `/` shortcut: focus the search input
+- [x] 8.7 Shortcut dispatcher MUST check `document.activeElement` and ignore shortcuts when focus is in `<input>` or `<textarea>`
+- [x] 8.8 Update URL query string on view switch and filter change so reload reproduces state
+
+## 9. Frontend — bulk download
+
+- [x] 9.1 Implement per-image single download via `<a href="<hosted_url>" download>` (no ZIP)
+- [x] 9.2 Implement bulk "Download ZIP": fetch each selected hosted URL as `ArrayBuffer`, pass to `fflate.zip`, wrap as `Blob`, trigger download via hidden `<a>`
+- [x] 9.3 Accumulate total selected `file_size` from entry metadata; disable the button with tooltip when the sum exceeds the soft cap
+- [x] 9.4 ZIP filenames use each entry's `<slug>-<WxH>.webp` basename
+- [x] 9.5 Verify the flow works on current iOS Safari (manual test documented in deploy step)
+
+## 10. Tests — backend
+
+- [x] 10.1 `tests/test_gallery_index.py` — scanner builds entries from seeded `/data/images` tree; missing sidecar skipped; missing `platform` tolerated; mtime-fallback when `created_at` absent
+- [x] 10.2 `tests/test_gallery_index.py` — filter cases: brand list, platform exact, date range, `q` substring case-insensitivity, dimension mins, all combinable
+- [x] 10.3 `tests/test_gallery_index.py` — sort cases: default `created_desc`, `created_asc`, `cost_desc`, `size_desc`
+- [x] 10.4 `tests/test_gallery_index.py` — pagination: offset/limit slicing; `limit=1000` clamped to 500
+- [x] 10.5 `tests/test_gallery_api.py` — Starlette TestClient: all endpoints return expected shapes on a seeded tree
+- [x] 10.6 `tests/test_gallery_api.py` — `POST /api/reindex` picks up a newly-written sidecar
+- [x] 10.7 `tests/test_gallery_api.py` — `TailnetOnlyMiddleware`: public Host → 404 on `/gallery/*`, public Host → 200 on `/mcp`, Tailnet Host → 200 on `/gallery/`
+
+## 11. Tests — frontend smoke
+
+- [x] 11.1 Lightweight HTML/JS unit test (no browser) verifying the URL-query-string serializer round-trips filter state
+- [x] 11.2 Pure-JS test for the ZIP filename derivation from entry path
+
+## 12. Docs
+
+- [x] 12.1 Add a "Gallery" subsection under "HTTP serving" in `CLAUDE.md` describing the sub-app mount, auth model, reindex cadence, and that it is Tailnet-only
+- [x] 12.2 Update README with a one-liner pointing at the internal Tailnet URL and noting the `/mcp` + public image routes are unchanged
+- [x] 12.3 Note the vendored `fflate` version + checksum in `gallery/static/README.md`
+
+## 13. Deploy
+
+- [ ] 13.1 Merge to `main`; let CI cut a release tag + image
+- [ ] 13.2 Decide the internal Tailnet hostname (e.g. `bildsprache-gallery.<tailnet>.ts.net`) and update `compose.yaml` with the docktail label
+- [ ] 13.3 Set `GALLERY_TAILNET_HOSTNAME=<hostname>` in the stack env
+- [ ] 13.4 Recreate the stack; tail logs for the first reindex success line
+- [ ] 13.5 Verify from a Tailnet-connected device: `GET /gallery/` → 200 HTML
+- [ ] 13.6 Verify from the public hostname: `GET https://bildsprache.cdit-dev.de/gallery/` → 404 (must NOT be 200)
+- [ ] 13.7 Verify `GET https://bildsprache.cdit-dev.de/mcp` → unchanged behavior
+- [ ] 13.8 Verify `GET https://img.cdit-works.de/<brand>/<existing>.webp` → unchanged behavior
+- [ ] 13.9 Manual UX pass on iOS Safari: browse, filter, select 3-5, download ZIP, confirm single `.zip` lands in Files
+- [ ] 13.10 Manual UX pass on desktop: keyboard shortcuts, grid↔list toggle, URL-reload reproduces state

@@ -343,10 +343,55 @@ def _mount_static_files(app) -> None:
     logger.info("Static file serving enabled at %s", storage_path)
 
 
+def _mount_gallery(app) -> None:
+    """Mount the Tailnet-only gallery sub-app at `/gallery`.
+
+    The TailnetOnlyMiddleware is installed on the parent app so that the
+    Host-header check fires for every `/gallery/*` request regardless of
+    which sub-app ends up handling it.
+    """
+    from pathlib import Path
+
+    from mcp_bildsprache.gallery.app import create_gallery_app
+    from mcp_bildsprache.gallery.middleware import TailnetOnlyMiddleware
+
+    if not settings.gallery_enabled:
+        logger.info("Gallery disabled via settings")
+        return
+
+    data_dir = Path(settings.image_storage_path)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    gallery_app = create_gallery_app(
+        data_dir=data_dir,
+        public_base_url=settings.image_domain,
+        reindex_interval_seconds=settings.gallery_reindex_interval_seconds,
+    )
+
+    # Mount BEFORE the `/` static mount runs so the `/gallery` prefix wins.
+    app.router.routes.insert(0, _build_gallery_mount(gallery_app))
+    app.add_middleware(
+        TailnetOnlyMiddleware,
+        allowed_host=settings.gallery_tailnet_hostname,
+    )
+    logger.info(
+        "Gallery mounted at /gallery (tailnet hostname: %s)",
+        settings.gallery_tailnet_hostname or "<unset>",
+    )
+
+
+def _build_gallery_mount(gallery_app):
+    """Factor out the Mount() construction so it's easy to test."""
+    from starlette.routing import Mount
+
+    return Mount("/gallery", app=gallery_app)
+
+
 def main() -> None:
     """Entry point for the mcp-bildsprache server."""
     if settings.transport == "http":
         app = mcp.http_app(transport="http")
+        _mount_gallery(app)
         _mount_static_files(app)
         import uvicorn
 
