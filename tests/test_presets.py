@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mcp_bildsprache.presets import (
+    CASEY_COMPOSITION_CLAUSE,
     PLATFORM_SIZES,
     PRESETS,
     get_dimensions,
@@ -90,7 +91,52 @@ class TestRouteModel:
         assert route_model() == "flux"
 
 
-class TestPlatformSizes:
+class TestRouteModelReferenceAware:
+    def test_has_references_redirects_icon_to_flux(self):
+        assert route_model(platform="icon", has_references=True) == "flux"
+
+    def test_has_references_redirects_svg_logo_to_flux(self):
+        assert route_model(platform="svg-logo", has_references=True) == "flux"
+
+    def test_explicit_recraft_hint_respected_with_references(self):
+        assert route_model(
+            platform="icon", model_hint="recraft", has_references=True
+        ) == "recraft"
+
+    def test_non_vector_platform_still_flux_with_references(self):
+        assert route_model(platform="blog-hero", has_references=True) == "flux"
+
+    def test_non_reference_routing_unchanged(self):
+        """Every existing case should return the same thing with has_references=False."""
+        # These pairs must match the pre-change behaviour.
+        cases = [
+            ({"platform": "icon"}, "recraft"),
+            ({"platform": "svg-logo"}, "recraft"),
+            ({"platform": "blog-hero"}, "flux"),
+            ({"model_hint": "gemini"}, "gemini"),
+            ({"model_hint": "flux"}, "flux"),
+            ({"model_hint": "recraft"}, "recraft"),
+            ({}, "flux"),
+        ]
+        for kwargs, expected in cases:
+            assert route_model(**kwargs) == expected
+            assert route_model(**kwargs, has_references=False) == expected
+
+
+class TestCompositionClause:
+    """Composition clause is defined in presets.py but gated by server.py
+    (only appended when an identity pack resolved to a non-empty list for
+    @casey.berlin). These tests exercise the gating via generate_image.
+    """
+
+    def test_clause_constant_content(self):
+        assert "face-to-camera" in CASEY_COMPOSITION_CLAUSE
+        assert "sole focal point" in CASEY_COMPOSITION_CLAUSE
+
+    def test_clause_not_in_base_preset(self):
+        # The clause is NOT hard-coded into the preset string — it's added
+        # at prompt-assembly time in server.py.
+        assert CASEY_COMPOSITION_CLAUSE not in PRESETS["casey.berlin"]
     EXPECTED_KEYS = [
         "linkedin-post", "linkedin-article", "linkedin-carousel",
         "instagram-feed", "instagram-story", "blog-hero",

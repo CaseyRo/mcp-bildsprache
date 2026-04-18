@@ -1,1 +1,3 @@
-"""MCP server for brand-aware image generation."""
+"""mcp-bildsprache package."""
+
+__version__ = "0.3.5"

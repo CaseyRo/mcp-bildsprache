@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "slots": {
+    "casey": {
+      "files": ["casey-1.webp", "casey-2.webp"],
+      "tags": ["person", "primary"]
+    },
+    "fimme": {
+      "files": ["fimme-1.webp"],
+      "tags": ["dog", "companion"]
+    },
+    "sien": {
+      "files": ["sien-1.webp"],
+      "tags": ["dog", "companion"]
+    }
+  },
+  "rules": {
+    "always_include": ["casey"],
+    "include_if_prompt_matches": {
+      "fimme": [
+        "walk",
+        "outside",
+        "nature",
+        "forest",
+        "park",
+        "reflection",
+        "reflective",
+        "personal",
+        "home",
+        "morning",
+        "evening"
+      ],
+      "sien": [
+        "walk",
+        "outside",
+        "nature",
+        "forest",
+        "park",
+        "reflection",
+        "reflective",
+        "personal",
+        "home",
+        "morning",
+        "evening"
+      ]
+    },
+    "exclude_if_prompt_matches": {
+      "fimme": [
+        "client",
+        "office",
+        "meeting",
+        "keynote",
+        "corporate",
+        "business",
+        "stage"
+      ],
+      "sien": [
+        "client",
+        "office",
+        "meeting",
+        "keynote",
+        "corporate",
+        "business",
+        "stage"
+      ]
+    }
+  }
+}

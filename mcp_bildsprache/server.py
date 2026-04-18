@@ -8,10 +8,20 @@ from typing import Literal
 from fastmcp import FastMCP
 from mcp.types import Icon
 
+from pathlib import Path
+
 from mcp_bildsprache.auth import BearerTokenVerifier, create_auth
 from mcp_bildsprache.config import settings
+from mcp_bildsprache.identity import (
+    get_loaded_packs,
+    get_pack_for_context,
+    load_identity_packs,
+    resolve_identity_for_call,
+    set_loaded_packs,
+)
 from mcp_bildsprache.pipeline import process_image
 from mcp_bildsprache.presets import (
+    CASEY_COMPOSITION_CLAUSE,
     PLATFORM_SIZES,
     PRESETS,
     get_dimensions,
@@ -22,7 +32,7 @@ from mcp_bildsprache.providers.bfl import generate_bfl
 from mcp_bildsprache.providers.gemini import generate_gemini
 from mcp_bildsprache.providers.recraft import generate_recraft
 from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
-from mcp_bildsprache.types import ProviderResult
+from mcp_bildsprache.types import IdentityPack, ProviderResult
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +65,65 @@ FALLBACKS = {
     "gemini": "flux",
     "recraft": "gemini",
 }
+
+# When references are present we must not fall back to a text-only path.
+# Both flux and gemini are reference-capable; recraft is not and should
+# never be picked in this branch (and `route_model(has_references=True)`
+# prevents it from being auto-selected in the first place).
+REFERENCE_FALLBACKS = {
+    "flux": "gemini",
+    "gemini": "flux",
+    "recraft": "flux",
+}
+
+
+# Module-level cache: reference image bytes are read from disk once per
+# process and then reused for every call that resolves to the same file.
+# Keyed by absolute Path; populated lazily on first need.
+_REFERENCE_BYTES_CACHE: dict[Path, bytes] = {}
+
+
+def _read_reference_bytes(path: Path) -> bytes:
+    """Read ``path`` once per process; subsequent reads return the cached bytes."""
+    cached = _REFERENCE_BYTES_CACHE.get(path)
+    if cached is not None:
+        return cached
+    data = path.read_bytes()
+    _REFERENCE_BYTES_CACHE[path] = data
+    return data
+
+
+def _resolved_slot_names(pack: IdentityPack, paths: list[Path]) -> list[str]:
+    """Return the slot names that contributed any of the given paths,
+    preserving manifest declaration order.
+    """
+    path_set = set(paths)
+    names: list[str] = []
+    for slot in pack.slots:
+        if any(p in path_set for p in slot.files):
+            names.append(slot.name)
+    return names
+
+
+def _load_identity_at_startup() -> None:
+    """Populate the identity-pack cache from `settings.identity_dir`.
+
+    Called once at module import so that tool calls see a populated cache
+    without needing to `await` a setup step. Failures are non-fatal: the
+    loader logs warnings and returns an empty mapping, and this server
+    simply proceeds without identity packs (text-only prompts).
+    """
+    if not settings.identity_enabled:
+        return
+    try:
+        packs = load_identity_packs(settings.identity_dir)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("identity_load_failed error=%s", exc)
+        packs = {}
+    set_loaded_packs(packs)
+
+
+_load_identity_at_startup()
 
 
 def _build_auth():
@@ -104,6 +173,32 @@ mcp = FastMCP(
 )
 
 
+# --- Health endpoint -----------------------------------------------------
+from datetime import datetime, timezone as _tz  # noqa: E402
+from starlette.requests import Request as _SReq  # noqa: E402
+from starlette.responses import JSONResponse as _SResp  # noqa: E402
+
+from mcp_bildsprache import __version__ as _version  # noqa: E402
+
+_start_time = datetime.now(_tz.utc)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def _health_check(request: _SReq) -> _SResp:
+    return _SResp({
+        "status": "healthy",
+        "service": "mcp-bildsprache",
+        "version": _version,
+        "upstream_reachable": True,
+        "uptime_seconds": int((datetime.now(_tz.utc) - _start_time).total_seconds()),
+    })
+
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def _health_check_z(request: _SReq) -> _SResp:
+    return await _health_check(request)
+
+
 @mcp.tool
 async def generate_image(
     prompt: str,
@@ -113,6 +208,8 @@ async def generate_image(
     dimensions: str | None = None,
     mood: str | None = None,
     raw: bool = False,
+    reference_images: list[bytes] | None = None,
+    include_dogs: bool | None = None,
 ) -> dict:
     """[image] Generate a brand-aware image.
 
@@ -129,9 +226,41 @@ async def generate_image(
         dimensions: Explicit dimensions as 'WxH' (e.g., '1200x1200'). Overrides platform sizing.
         mood: Emotional register for the image (e.g., 'contemplative', 'energetic').
         raw: If true, also store and return the unprocessed provider image (original format, no resize/WebP) as a separate URL.
+        reference_images: Optional list of reference-image bytes. When provided,
+            skips the identity pack resolver and forwards the caller's refs
+            directly to the provider. Rarely used — identity refs are usually
+            auto-resolved from ``context``.
+        include_dogs: Override the dog-slot heuristic for ``@casey.berlin``:
+            None = use manifest rules (default), True = force-include dog
+            slots, False = suppress them. Ignored when ``context`` is not
+            ``@casey.berlin`` or no identity pack is loaded.
     """
+    # ------------------------------------------------------------------
+    # Identity resolution (before routing, so has_references is accurate)
+    # ------------------------------------------------------------------
+    pack: IdentityPack | None = get_pack_for_context(context)
+    resolved_paths: list[Path] = []
+    used_identity_pack = False
+
+    if reference_images:
+        # Caller-supplied refs bypass the resolver entirely (per spec).
+        refs_bytes: list[bytes] = list(reference_images)
+    elif pack is not None:
+        resolved_paths = resolve_identity_for_call(pack, prompt, include_dogs=include_dogs)
+        refs_bytes = [_read_reference_bytes(p) for p in resolved_paths]
+        used_identity_pack = bool(refs_bytes)
+    else:
+        refs_bytes = []
+
+    has_refs = bool(refs_bytes)
+
     # Determine provider (flux/gemini/recraft) and optional specific model ID
-    selected_provider = route_model(context=context, platform=platform, model_hint=model)
+    selected_provider = route_model(
+        context=context,
+        platform=platform,
+        model_hint=model,
+        has_references=has_refs,
+    )
     specific_model = model if model and model != selected_provider else None
 
     # Determine dimensions
@@ -146,10 +275,13 @@ async def generate_image(
     else:
         w, h = 1200, 1200
 
-    # Build enhanced prompt with brand preset
+    # Build enhanced prompt with brand preset (+ composition clause when
+    # an identity pack resolved to a non-empty list for @casey.berlin)
     parts = []
     if context:
         parts.append(get_preset(context))
+        if used_identity_pack and context == "@casey.berlin":
+            parts.append(CASEY_COMPOSITION_CLAUSE)
     parts.append(prompt)
     if mood:
         parts.append(f"Mood/emotional register: {mood}")
@@ -161,20 +293,36 @@ async def generate_image(
 
     async def _call_provider(provider_key: str, model_id: str | None = None) -> ProviderResult:
         provider_fn = PROVIDERS[provider_key]
+        kwargs: dict = {}
+        if has_refs:
+            kwargs["reference_images"] = refs_bytes
         if provider_key == "flux" and model_id:
-            return await provider_fn(enhanced_prompt, w, h, model=model_id)
-        return await provider_fn(enhanced_prompt, w, h)
+            return await provider_fn(enhanced_prompt, w, h, model=model_id, **kwargs)
+        return await provider_fn(enhanced_prompt, w, h, **kwargs)
+
+    fallback_map = REFERENCE_FALLBACKS if has_refs else FALLBACKS
 
     try:
         provider_result = await _call_provider(selected_provider, specific_model)
     except Exception as e:
         logger.warning("Provider %s failed: %s — trying fallback", selected_provider, e)
-        fallback_provider = FALLBACKS.get(selected_provider)
+        fallback_provider = fallback_map.get(selected_provider)
         if not fallback_provider:
             raise
         provider_result = await _call_provider(fallback_provider)
         fallback_used = True
         original_model = selected_provider
+
+    # Per-call structured log for identity resolution (INFO).
+    if used_identity_pack and pack is not None:
+        slot_names = _resolved_slot_names(pack, resolved_paths)
+        logger.info(
+            "identity_resolved brand=%s slots=%s provider=%s has_include_dogs_override=%s",
+            context,
+            slot_names,
+            provider_result.model,
+            include_dogs is not None,
+        )
 
     # Build base response
     result: dict = {
@@ -269,8 +417,13 @@ async def generate_prompt(
 
 
 @mcp.tool
-async def list_models() -> list[dict]:
-    """[image] List available image generation models and their capabilities."""
+async def list_models() -> dict:
+    """[image] List available image generation models and their capabilities.
+
+    Returns a mapping with ``providers`` (list of available providers) and
+    ``identity_packs`` (brand → bool indicating whether an identity pack is
+    currently loaded for that brand).
+    """
     available = []
 
     if settings.gemini_api_key.get_secret_value():
@@ -304,7 +457,13 @@ async def list_models() -> list[dict]:
             "status": "available",
         })
 
-    return available
+    loaded = get_loaded_packs()
+    identity_packs = {brand: True for brand in loaded}
+
+    return {
+        "providers": available,
+        "identity_packs": identity_packs,
+    }
 
 
 @mcp.tool
@@ -314,14 +473,17 @@ async def get_visual_presets(context: BrandContext | None = None) -> dict:
     Args:
         context: Specific brand context to retrieve. If omitted, returns all presets.
     """
+    loaded = get_loaded_packs()
     if context:
         return {
             "context": context,
             "preset": get_preset(context),
+            "identity_pack_loaded": context in loaded,
         }
     return {
         "presets": PRESETS,
         "platforms": PLATFORM_SIZES,
+        "identity_packs": {brand: True for brand in loaded},
     }
 
 
@@ -390,7 +552,9 @@ def _build_gallery_mount(gallery_app):
 def main() -> None:
     """Entry point for the mcp-bildsprache server."""
     if settings.transport == "http":
-        app = mcp.http_app(transport="http")
+        # stateless_http=True → eliminates orphaned SSE sessions after CF
+        # kills idle connections. See openspec mcp-stateless-transport.
+        app = mcp.http_app(transport="streamable-http", stateless_http=True)
         _mount_gallery(app)
         _mount_static_files(app)
         import uvicorn

@@ -23,7 +23,9 @@ services:
     volumes:
       - fastmcp-data:/data/fastmcp
       - images-data:/data/images
+      - identity-data:/data/identity:ro
 
 volumes:
   fastmcp-data:
   images-data:
+  identity-data:

@@ -39,15 +39,29 @@ async def generate_recraft(
     prompt: str,
     width: int = 1024,
     height: int = 1024,
+    reference_images: list[bytes] | None = None,
 ) -> ProviderResult:
     """Generate an image using Recraft V4.
 
     V4 does not support named style presets — style is prompt-driven.
     Downloads the image and returns a ProviderResult with raw bytes.
+
+    Recraft's text-to-image endpoint does not accept reference images;
+    when ``reference_images`` is non-empty they are dropped with a single
+    ``INFO`` log and the request proceeds as text-only. Callers relying on
+    identity fidelity should prefer a reference-capable provider
+    (Gemini or FLUX kontext-pro) — routing is handled upstream in
+    ``server.py``.
     """
     api_key = settings.recraft_api_key.get_secret_value()
     if not api_key:
         raise ValueError("RECRAFT_API_KEY not configured")
+
+    if reference_images:
+        logger.info(
+            "recraft: dropped %d reference image(s) — provider does not support references",
+            len(reference_images),
+        )
 
     headers = {
         "Content-Type": "application/json",
