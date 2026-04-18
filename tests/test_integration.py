@@ -409,7 +409,6 @@ class TestStaticMountHygiene:
 
         # Exactly one mount call, rooted at the images dir.
         assert fake_app.mount.call_count == 1
-        (_, kwargs) = fake_app.mount.call_args.args, fake_app.mount.call_args.kwargs
         mounted = fake_app.mount.call_args.args[1]
         # StaticFiles(directory=...) — inspect the directory attribute.
         assert str(images_dir) == mounted.directory
