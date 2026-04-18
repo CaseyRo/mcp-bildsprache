@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.7] - 2026-04-18
+
+- chore: resolve merge conflicts and clean up post-parallel-build state
+
+
 ## [0.3.5] - 2026-04-18
 
 - fix(auth): enable bearer auth without Keycloak dependency
