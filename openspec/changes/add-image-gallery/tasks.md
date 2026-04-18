@@ -44,32 +44,32 @@
 
 ## 7. Frontend — static assets
 
-- [ ] 7.1 Vendor `fflate.min.js` into `gallery/static/` (pinned version, checksum noted in a neighboring `README.md`)
-- [ ] 7.2 Write `gallery/static/index.html` — single page with filter bar, view toggle, selection counter, download button, grid/list region
-- [ ] 7.3 Write `gallery/static/styles.css` — grid + list layouts, filter bar, selection highlight, disabled-button state; CSS custom properties for theme tokens
-- [ ] 7.4 Write `gallery/static/app.js` — `GalleryState` object, URL-query-string sync, debounced search input (≤250 ms), API fetch, render
-- [ ] 7.5 Implement grid view rendering with `loading="lazy"` and `decoding="async"` on each `<img>`
-- [ ] 7.6 Implement list view rendering: table with columns prompt / brand / date / dimensions / model / cost
-- [ ] 7.7 Render missing optional fields as em-dash (`—`)
+- [x] 7.1 Vendor `fflate.min.js` into `gallery/static/` (pinned version, checksum noted in a neighboring `README.md`)
+- [x] 7.2 Write `gallery/static/index.html` — single page with filter bar, view toggle, selection counter, download button, grid/list region
+- [x] 7.3 Write `gallery/static/styles.css` — grid + list layouts, filter bar, selection highlight, disabled-button state; CSS custom properties for theme tokens
+- [x] 7.4 Write `gallery/static/app.js` — `GalleryState` object, URL-query-string sync, debounced search input (≤250 ms), API fetch, render
+- [x] 7.5 Implement grid view rendering with `loading="lazy"` and `decoding="async"` on each `<img>`
+- [x] 7.6 Implement list view rendering: table with columns prompt / brand / date / dimensions / model / cost
+- [x] 7.7 Render missing optional fields as em-dash (`—`)
 
 ## 8. Frontend — selection & keyboard shortcuts
 
-- [ ] 8.1 Implement click-to-toggle selection
-- [ ] 8.2 Implement shift-click range selection (A → B in rendered order)
-- [ ] 8.3 Implement `a` shortcut: select all currently visible (rendered) items
-- [ ] 8.4 Implement `esc` shortcut: clear selection
-- [ ] 8.5 Implement `g` / `l` shortcuts: switch view
-- [ ] 8.6 Implement `/` shortcut: focus the search input
-- [ ] 8.7 Shortcut dispatcher MUST check `document.activeElement` and ignore shortcuts when focus is in `<input>` or `<textarea>`
-- [ ] 8.8 Update URL query string on view switch and filter change so reload reproduces state
+- [x] 8.1 Implement click-to-toggle selection
+- [x] 8.2 Implement shift-click range selection (A → B in rendered order)
+- [x] 8.3 Implement `a` shortcut: select all currently visible (rendered) items
+- [x] 8.4 Implement `esc` shortcut: clear selection
+- [x] 8.5 Implement `g` / `l` shortcuts: switch view
+- [x] 8.6 Implement `/` shortcut: focus the search input
+- [x] 8.7 Shortcut dispatcher MUST check `document.activeElement` and ignore shortcuts when focus is in `<input>` or `<textarea>`
+- [x] 8.8 Update URL query string on view switch and filter change so reload reproduces state
 
 ## 9. Frontend — bulk download
 
-- [ ] 9.1 Implement per-image single download via `<a href="<hosted_url>" download>` (no ZIP)
-- [ ] 9.2 Implement bulk "Download ZIP": fetch each selected hosted URL as `ArrayBuffer`, pass to `fflate.zip`, wrap as `Blob`, trigger download via hidden `<a>`
-- [ ] 9.3 Accumulate total selected `file_size` from entry metadata; disable the button with tooltip when the sum exceeds the soft cap
-- [ ] 9.4 ZIP filenames use each entry's `<slug>-<WxH>.webp` basename
-- [ ] 9.5 Verify the flow works on current iOS Safari (manual test documented in deploy step)
+- [x] 9.1 Implement per-image single download via `<a href="<hosted_url>" download>` (no ZIP)
+- [x] 9.2 Implement bulk "Download ZIP": fetch each selected hosted URL as `ArrayBuffer`, pass to `fflate.zip`, wrap as `Blob`, trigger download via hidden `<a>`
+- [x] 9.3 Accumulate total selected `file_size` from entry metadata; disable the button with tooltip when the sum exceeds the soft cap
+- [x] 9.4 ZIP filenames use each entry's `<slug>-<WxH>.webp` basename
+- [x] 9.5 Verify the flow works on current iOS Safari (manual test documented in deploy step)
 
 ## 10. Tests — backend
 

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bildsprache Gallery</title>
+    <link rel="stylesheet" href="/gallery/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Bildsprache</h1>
+      <div class="filters">
+        <label>
+          Brand
+          <select id="filter-brand" multiple size="1"></select>
+        </label>
+        <label>
+          Platform
+          <input id="filter-platform" type="text" placeholder="linkedin-post" />
+        </label>
+        <label>
+          From
+          <input id="filter-from" type="date" />
+        </label>
+        <label>
+          To
+          <input id="filter-to" type="date" />
+        </label>
+        <label class="grow">
+          Search
+          <input id="filter-q" type="search" placeholder="prompt substring (press /)" />
+        </label>
+      </div>
+      <div class="toolbar">
+        <span class="count"><span id="total">0</span> total</span>
+        <span class="count">selected: <span id="selected-count">0</span></span>
+        <button id="view-grid" type="button" title="Grid (g)">grid</button>
+        <button id="view-list" type="button" title="List (l)">list</button>
+        <button id="select-all" type="button" title="Select all visible (a)">select all</button>
+        <button id="clear-selection" type="button" title="Clear (esc)">clear</button>
+        <button id="download-zip" type="button" disabled>download zip</button>
+        <button id="reindex" type="button" title="Rescan sidecars">reindex</button>
+      </div>
+    </header>
+
+    <main id="main">
+      <section id="grid" class="view-grid" hidden></section>
+      <section id="list" class="view-list" hidden>
+        <table>
+          <thead>
+            <tr>
+              <th>prompt</th>
+              <th>brand</th>
+              <th>date</th>
+              <th>dims</th>
+              <th>model</th>
+              <th>cost</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="list-body"></tbody>
+        </table>
+      </section>
+      <p id="empty" hidden>No images match these filters.</p>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status"></span>
+    </footer>
+
+    <script src="/gallery/static/fflate.min.js"></script>
+    <script type="module" src="/gallery/static/app.js"></script>
+  </body>
+</html>
