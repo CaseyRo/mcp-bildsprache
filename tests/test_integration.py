@@ -205,6 +205,219 @@ class TestDimensionHandling:
         assert result["dimensions"] == "1200x1200"
 
 
+class TestIdentityIntegration:
+    """End-to-end generate_image with a stubbed identity pack — asserts
+    that reference bytes, composition clause, routing, and structured log
+    all thread together correctly.
+    """
+
+    @staticmethod
+    def _write_identity_pack(tmp_path: Path) -> Path:
+        identity_root = tmp_path / "identity"
+        pack_dir = identity_root / "casey-berlin"
+        pack_dir.mkdir(parents=True)
+
+        # Tiny files, written to disk so the resolver picks them up.
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), color=(100, 100, 100)).save(buf, format="WEBP")
+        (pack_dir / "casey-1.webp").write_bytes(buf.getvalue())
+        (pack_dir / "fimme-1.webp").write_bytes(buf.getvalue())
+        (pack_dir / "sien-1.webp").write_bytes(buf.getvalue())
+
+        manifest = {
+            "version": 1,
+            "slots": {
+                "casey": {"files": ["casey-1.webp"], "tags": ["person"]},
+                "fimme": {"files": ["fimme-1.webp"], "tags": ["dog"]},
+                "sien":  {"files": ["sien-1.webp"],  "tags": ["dog"]},
+            },
+            "rules": {
+                "always_include": ["casey"],
+                "include_if_prompt_matches": {
+                    "fimme": ["walk", "morning"],
+                    "sien":  ["walk", "morning"],
+                },
+                "exclude_if_prompt_matches": {
+                    "fimme": ["office", "meeting"],
+                    "sien":  ["office", "meeting"],
+                },
+            },
+        }
+        (pack_dir / "manifest.json").write_text(json.dumps(manifest))
+        return identity_root
+
+    @pytest.mark.anyio
+    async def test_personal_prompt_enhanced_prompt_and_log(
+        self, tmp_path: Path, mock_provider, caplog
+    ):
+        import logging
+
+        from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
+        from mcp_bildsprache.presets import CASEY_COMPOSITION_CLAUSE
+        from mcp_bildsprache.server import generate_image
+
+        identity_root = self._write_identity_pack(tmp_path)
+        set_loaded_packs(load_identity_packs(identity_root))
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path / "out")
+            ss.image_domain = "https://img.cdit-works.de"
+
+            with caplog.at_level(logging.INFO, logger="mcp_bildsprache.server"):
+                await generate_image(
+                    prompt="morning walk through the forest",
+                    context="@casey.berlin",
+                    dimensions="512x512",
+                )
+
+        # The provider mock was called with reference_images populated.
+        call_kwargs = mock_provider.await_args.kwargs
+        assert "reference_images" in call_kwargs
+        refs = call_kwargs["reference_images"]
+        assert len(refs) == 3
+
+        # The enhanced prompt includes the composition clause.
+        call_args = mock_provider.await_args.args
+        sent_prompt = call_args[0]
+        assert CASEY_COMPOSITION_CLAUSE in sent_prompt
+
+        # An INFO record with identity_resolved fields is emitted.
+        rec = next(r for r in caplog.records if "identity_resolved" in r.message)
+        assert "brand=@casey.berlin" in rec.message
+        assert "slots=['casey', 'fimme', 'sien']" in rec.message
+        assert "has_include_dogs_override=False" in rec.message
+
+        # Cleanup — avoid leaking into other tests.
+        set_loaded_packs({})
+
+    @pytest.mark.anyio
+    async def test_person_excluding_prompt_skips_identity_and_clause(
+        self, tmp_path: Path, mock_provider
+    ):
+        from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
+        from mcp_bildsprache.presets import CASEY_COMPOSITION_CLAUSE
+        from mcp_bildsprache.server import generate_image
+
+        identity_root = self._write_identity_pack(tmp_path)
+        set_loaded_packs(load_identity_packs(identity_root))
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path / "out")
+            ss.image_domain = "https://img.cdit-works.de"
+
+            await generate_image(
+                prompt="a flat icon of a coffee cup",
+                context="@casey.berlin",
+                dimensions="512x512",
+            )
+
+        # No reference images forwarded; no composition clause in prompt.
+        call_kwargs = mock_provider.await_args.kwargs
+        assert "reference_images" not in call_kwargs
+        sent_prompt = mock_provider.await_args.args[0]
+        assert CASEY_COMPOSITION_CLAUSE not in sent_prompt
+
+        set_loaded_packs({})
+
+    @pytest.mark.anyio
+    async def test_composition_clause_scoped_to_casey_only(
+        self, tmp_path: Path, mock_provider
+    ):
+        from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
+        from mcp_bildsprache.presets import CASEY_COMPOSITION_CLAUSE
+        from mcp_bildsprache.server import generate_image
+
+        identity_root = self._write_identity_pack(tmp_path)
+        set_loaded_packs(load_identity_packs(identity_root))
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path / "out")
+            ss.image_domain = "https://img.cdit-works.de"
+
+            await generate_image(
+                prompt="morning walk",
+                context="@cdit",
+                dimensions="512x512",
+            )
+
+        sent_prompt = mock_provider.await_args.args[0]
+        assert CASEY_COMPOSITION_CLAUSE not in sent_prompt
+
+        set_loaded_packs({})
+
+    @pytest.mark.anyio
+    async def test_caller_supplied_refs_bypass_resolver(
+        self, tmp_path: Path, mock_provider
+    ):
+        from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
+        from mcp_bildsprache.server import generate_image
+
+        identity_root = self._write_identity_pack(tmp_path)
+        set_loaded_packs(load_identity_packs(identity_root))
+
+        caller_ref = b"caller-supplied-bytes-x"
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path / "out")
+            ss.image_domain = "https://img.cdit-works.de"
+
+            await generate_image(
+                prompt="morning walk",
+                context="@casey.berlin",
+                dimensions="512x512",
+                reference_images=[caller_ref],
+            )
+
+        call_kwargs = mock_provider.await_args.kwargs
+        refs = call_kwargs["reference_images"]
+        assert len(refs) == 1
+        assert refs[0] == caller_ref
+
+        set_loaded_packs({})
+
+
+class TestStaticMountHygiene:
+    """Reference images on /data/identity must never be reachable via the
+    public static mount. This guards against a regression where someone
+    changes the mount root to /data/ (both subdirs would be exposed).
+    """
+
+    def test_mount_target_is_images_not_identity(self, tmp_path: Path):
+        """_mount_static_files mounts the image_storage_path directory only."""
+        from unittest.mock import MagicMock
+
+        from mcp_bildsprache.server import _mount_static_files
+
+        images_dir = tmp_path / "images"
+        identity_dir = tmp_path / "identity"
+        images_dir.mkdir()
+        identity_dir.mkdir()
+        (identity_dir / "secret.webp").write_bytes(b"not-public")
+
+        fake_app = MagicMock()
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(images_dir)
+            _mount_static_files(fake_app)
+
+        # Exactly one mount call, rooted at the images dir.
+        assert fake_app.mount.call_count == 1
+        (_, kwargs) = fake_app.mount.call_args.args, fake_app.mount.call_args.kwargs
+        mounted = fake_app.mount.call_args.args[1]
+        # StaticFiles(directory=...) — inspect the directory attribute.
+        assert str(images_dir) == mounted.directory
+        # The identity directory must NOT be inside the mounted root.
+        assert not mounted.directory.startswith(str(identity_dir))
+        assert "identity" not in mounted.directory
+
+
 class TestOtherTools:
     @pytest.mark.anyio
     async def test_generate_prompt_basic(self):

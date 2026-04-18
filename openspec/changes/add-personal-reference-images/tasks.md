@@ -72,8 +72,8 @@
 
 ## 10. HTTP hygiene — keep /data/identity off the public mount
 
-- [ ] 10.1 Audit `_mount_static_files` in `server.py` — confirm only `/data/images` is mounted
-- [ ] 10.2 Add a regression test asserting that no static mount resolves under `/data/identity/`
+- [x] 10.1 Audit `_mount_static_files` in `server.py` — confirm only `/data/images` is mounted
+- [x] 10.2 Add a regression test asserting that no static mount resolves under `/data/identity/`
 
 ## 11. Tests
 
@@ -84,9 +84,9 @@
 - [x] 11.5 `tests/test_providers.py` — BFL: single ref → kontext-pro; multi-ref → collage → kontext-pro; kontext-pro fail → flux-2-pro with image_prompt; flux-2-max never called when refs present; cost/model reflect actual success
 - [x] 11.6 `tests/test_providers.py` — Recraft: log-and-drop, text-only request unchanged
 - [x] 11.7 `tests/test_presets.py` — `route_model` reference-aware: Recraft auto-route redirected; explicit Recraft hint respected; non-reference routing byte-for-byte unchanged
-- [ ] 11.8 `tests/test_presets.py` — composition clause: present for `@casey.berlin` personal prompt, absent for person-excluding prompt, absent for non-`@casey.berlin` contexts
-- [ ] 11.9 `tests/test_integration.py` — end-to-end `generate_image` happy path with a stubbed identity pack (mock provider HTTP), asserting the full log record and the final enhanced prompt
-- [ ] 11.10 `tests/test_integration.py` — regression test that no route resolves under `/data/identity/`
+- [x] 11.8 `tests/test_presets.py` — composition clause: present for `@casey.berlin` personal prompt, absent for person-excluding prompt, absent for non-`@casey.berlin` contexts
+- [x] 11.9 `tests/test_integration.py` — end-to-end `generate_image` happy path with a stubbed identity pack (mock provider HTTP), asserting the full log record and the final enhanced prompt
+- [x] 11.10 `tests/test_integration.py` — regression test that no route resolves under `/data/identity/`
 
 ## 12. Docs
 
