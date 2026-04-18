@@ -8,7 +8,7 @@ from typing import Literal
 from fastmcp import FastMCP
 from mcp.types import Icon
 
-from mcp_bildsprache.auth import create_auth
+from mcp_bildsprache.auth import BearerTokenVerifier, create_auth
 from mcp_bildsprache.config import settings
 from mcp_bildsprache.pipeline import process_image
 from mcp_bildsprache.presets import (
@@ -58,23 +58,37 @@ FALLBACKS = {
 
 
 def _build_auth():
-    """Build auth provider if running in HTTP mode."""
+    """Build auth provider if running in HTTP mode.
+
+    Reads MCP_API_KEY (fleet standard) with fallback to MCP_BILDSPRACHE_API_KEY
+    for backwards compatibility. In HTTP mode, a missing/empty key causes the
+    server to refuse to start rather than silently run unauthenticated.
+    """
     if settings.transport != "http":
         return None
 
-    if not settings.keycloak_client_secret:
-        logger.warning("KEYCLOAK_CLIENT_SECRET not set — OIDC proxy auth disabled")
-        return None
-
-    api_key = settings.ensure_api_key()
-    return create_auth(
-        api_key=api_key,
-        keycloak_issuer=settings.keycloak_issuer,
-        keycloak_audience=settings.keycloak_audience,
-        keycloak_client_id=settings.keycloak_client_id,
-        keycloak_client_secret=settings.keycloak_client_secret,
-        base_url=settings.base_url,
+    import os
+    api_key = (
+        os.getenv("MCP_API_KEY", "")
+        or settings.mcp_bildsprache_api_key
     )
+    if not api_key:
+        raise SystemExit(
+            "MCP_API_KEY (or MCP_BILDSPRACHE_API_KEY) is required in HTTP mode. "
+            "Refusing to start an unauthenticated server."
+        )
+
+    if settings.keycloak_client_secret:
+        return create_auth(
+            api_key=api_key,
+            keycloak_issuer=settings.keycloak_issuer,
+            keycloak_audience=settings.keycloak_audience,
+            keycloak_client_id=settings.keycloak_client_id,
+            keycloak_client_secret=settings.keycloak_client_secret,
+            base_url=settings.base_url,
+        )
+
+    return BearerTokenVerifier(api_key)
 
 
 mcp = FastMCP(
