@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import SecretStr
@@ -25,6 +26,10 @@ class Settings(BaseSettings):
     enable_hosting: bool = True
     image_domain: str = "https://img.cdit-works.de"
     image_storage_path: str = "/data/images"
+
+    # Identity packs (personal likeness reference images; private volume)
+    identity_dir: Path = Path("/data/identity")
+    identity_enabled: bool = True
 
     # Server transport
     transport: Literal["stdio", "http"] = "stdio"
