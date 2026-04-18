@@ -38,9 +38,9 @@
 
 ## 6. Mount into the existing HTTP app
 
-- [ ] 6.1 In `server.py::main()`, after `mcp.http_app(transport="http")` returns the ASGI app, mount the gallery sub-app at `/gallery` if `settings.gallery_enabled`
-- [ ] 6.2 Install `TailnetOnlyMiddleware` on the parent app so it fires for any `/gallery/*` path
-- [ ] 6.3 Confirm ordering: static `/data/images` stays mounted at `/`, `/mcp` still routes to FastMCP, `/gallery` is new
+- [x] 6.1 In `server.py::main()`, after `mcp.http_app(transport="http")` returns the ASGI app, mount the gallery sub-app at `/gallery` if `settings.gallery_enabled`
+- [x] 6.2 Install `TailnetOnlyMiddleware` on the parent app so it fires for any `/gallery/*` path
+- [x] 6.3 Confirm ordering: static `/data/images` stays mounted at `/`, `/mcp` still routes to FastMCP, `/gallery` is new
 
 ## 7. Frontend — static assets
 
