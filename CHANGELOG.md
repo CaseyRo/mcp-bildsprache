@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.9] - 2026-04-18
+
+- feat(gallery): port frontend to CDiT MX-Brutalist design system
+
+
 ## [0.3.8] - 2026-04-18
 
 - infra: add docktail labels and gallery/identity env vars to compose
