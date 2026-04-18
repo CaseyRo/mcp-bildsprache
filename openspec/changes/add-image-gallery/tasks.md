@@ -7,19 +7,19 @@
 
 ## 2. Index (sidecar scanner)
 
-- [ ] 2.1 Define `GalleryEntry` dataclass in `gallery/index.py` with all fields from the design doc (path, hosted_url, brand, prompt, prompt_lower, model, cost_estimate, width, height, platform, file_size, created_at)
-- [ ] 2.2 Implement `scan_index(data_dir: Path, public_base_url: str) -> list[GalleryEntry]` — walk `<data_dir>/**/*.json`, parse each sidecar, build entries, tolerate missing optional fields, skip WebPs without sidecars
-- [ ] 2.3 Derive `brand` from the top-level dir under `data_dir`
-- [ ] 2.4 Derive `created_at` from sidecar `created_at` if present, else `Path.stat().st_mtime`
-- [ ] 2.5 Implement `GalleryIndex` class holding the entry list + path-keyed dict, with `refresh()`, `total()`, `get(path)`, and `filter_and_sort(**query)` methods
-- [ ] 2.6 Implement filtering: `brand` (list), `platform` (exact), `from`/`to` (ISO-8601 → datetime), `q` (substring over `prompt_lower`), `min_width`, `min_height`
-- [ ] 2.7 Implement sorting: `created_desc` (default), `created_asc`, `cost_desc`, `size_desc`
-- [ ] 2.8 Implement pagination: `limit` (default 100, max 500), `offset` (default 0)
+- [x] 2.1 Define `GalleryEntry` dataclass in `gallery/index.py` with all fields from the design doc (path, hosted_url, brand, prompt, prompt_lower, model, cost_estimate, width, height, platform, file_size, created_at)
+- [x] 2.2 Implement `scan_index(data_dir: Path, public_base_url: str) -> list[GalleryEntry]` — walk `<data_dir>/**/*.json`, parse each sidecar, build entries, tolerate missing optional fields, skip WebPs without sidecars
+- [x] 2.3 Derive `brand` from the top-level dir under `data_dir`
+- [x] 2.4 Derive `created_at` from sidecar `created_at` if present, else `Path.stat().st_mtime`
+- [x] 2.5 Implement `GalleryIndex` class holding the entry list + path-keyed dict, with `refresh()`, `total()`, `get(path)`, and `filter_and_sort(**query)` methods
+- [x] 2.6 Implement filtering: `brand` (list), `platform` (exact), `from`/`to` (ISO-8601 → datetime), `q` (substring over `prompt_lower`), `min_width`, `min_height`
+- [x] 2.7 Implement sorting: `created_desc` (default), `created_asc`, `cost_desc`, `size_desc`
+- [x] 2.8 Implement pagination: `limit` (default 100, max 500), `offset` (default 0)
 
 ## 3. Background reindex loop
 
-- [ ] 3.1 Implement `async def _reindex_loop(index, interval_s)` in `gallery/index.py`
-- [ ] 3.2 Log `INFO` on each successful reindex with count + duration; `WARN` on failures without crashing the loop
+- [x] 3.1 Implement `async def _reindex_loop(index, interval_s)` in `gallery/index.py`
+- [x] 3.2 Log `INFO` on each successful reindex with count + duration; `WARN` on failures without crashing the loop
 
 ## 4. Starlette sub-app
 
