@@ -115,6 +115,16 @@ function formatDate(iso) {
   }
 }
 
+function iconSvg(id, className = "icon") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", className);
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", `#${id}`);
+  svg.appendChild(use);
+  return svg;
+}
+
 function renderGrid() {
   const root = document.getElementById("grid");
   root.replaceChildren();
@@ -129,9 +139,10 @@ function renderGrid() {
         href: entry.hosted_url,
         download: basename,
         title: "Download this image",
+        "aria-label": "Download",
         onclick: (e) => e.stopPropagation(),
       },
-      "↓",
+      iconSvg("icon-download"),
     );
     const card = el(
       "div",
@@ -149,7 +160,7 @@ function renderGrid() {
       el(
         "div",
         { class: "meta" },
-        el("span", {}, dash(entry.brand)),
+        el("span", { class: "brand-tag" }, dash(entry.brand)),
         el("span", {}, `${entry.width}×${entry.height}`),
         dl,
       ),
@@ -173,12 +184,12 @@ function renderList() {
         dataset: { path: entry.path },
         onclick: (e) => onItemClick(e, entry.path),
       },
-      el("td", {}, dash(entry.prompt)),
-      el("td", {}, dash(entry.brand)),
-      el("td", {}, formatDate(entry.created_at)),
-      el("td", {}, `${entry.width}×${entry.height}`),
-      el("td", {}, dash(entry.model)),
-      el("td", {}, dash(entry.cost_estimate)),
+      el("td", { class: "prompt" }, dash(entry.prompt)),
+      el("td", { class: "mono" }, dash(entry.brand)),
+      el("td", { class: "date" }, formatDate(entry.created_at)),
+      el("td", { class: "dims" }, `${entry.width}×${entry.height}`),
+      el("td", { class: "mono" }, dash(entry.model)),
+      el("td", { class: "cost" }, dash(entry.cost_estimate)),
       el(
         "td",
         {},
@@ -188,9 +199,10 @@ function renderList() {
             href: entry.hosted_url,
             download: basename,
             title: "Download",
+            "aria-label": "Download",
             onclick: (e) => e.stopPropagation(),
           },
-          "↓",
+          iconSvg("icon-download"),
         ),
       ),
     );
@@ -214,8 +226,42 @@ function applyView() {
     grid.hidden = isEmpty;
     renderGrid();
   }
-  document.getElementById("view-grid").classList.toggle("active", state.view === "grid");
-  document.getElementById("view-list").classList.toggle("active", state.view === "list");
+  const gridBtn = document.getElementById("view-grid");
+  const listBtn = document.getElementById("view-list");
+  gridBtn.setAttribute("aria-pressed", state.view === "grid" ? "true" : "false");
+  listBtn.setAttribute("aria-pressed", state.view === "list" ? "true" : "false");
+}
+
+// ---------------------------------------------------------------------------
+// Theme toggle (data-theme on <html>, persisted to localStorage)
+// ---------------------------------------------------------------------------
+
+function currentTheme() {
+  const explicit = document.documentElement.getAttribute("data-theme");
+  if (explicit === "light" || explicit === "dark") return explicit;
+  if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    return "dark";
+  }
+  return "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  try {
+    localStorage.setItem("bildsprache:theme", theme);
+  } catch (_e) {
+    /* storage unavailable — in-session only */
+  }
+  const btn = document.getElementById("theme-toggle");
+  if (!btn) return;
+  const use = btn.querySelector("use");
+  if (use) use.setAttribute("href", theme === "dark" ? "#icon-sun" : "#icon-moon");
+  btn.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  btn.title = btn.getAttribute("aria-label");
+}
+
+function toggleTheme() {
+  applyTheme(currentTheme() === "dark" ? "light" : "dark");
 }
 
 function updateSelectedCountUI() {
@@ -428,6 +474,7 @@ function wireEvents() {
   document.getElementById("clear-selection").addEventListener("click", clearSelection);
   document.getElementById("download-zip").addEventListener("click", downloadZip);
   document.getElementById("reindex").addEventListener("click", triggerReindex);
+  document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
 
   const debouncedFetch = debounce(async () => {
     syncUrlFromState();
@@ -492,6 +539,7 @@ function setView(v) {
 }
 
 async function main() {
+  applyTheme(currentTheme());
   readStateFromUrl();
   wireEvents();
   await fetchImages();

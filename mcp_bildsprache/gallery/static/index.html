@@ -4,11 +4,95 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Bildsprache Gallery</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="/gallery/static/styles.css" />
+    <script>
+      // Set theme before first paint so we don't flash the wrong palette.
+      (function () {
+        try {
+          var saved = localStorage.getItem("bildsprache:theme");
+          if (saved === "light" || saved === "dark") {
+            document.documentElement.setAttribute("data-theme", saved);
+          }
+        } catch (_) {}
+      })();
+    </script>
+    <!-- Lucide icon defs: inlined once, referenced via <use href="#icon-..."> -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
+      <defs>
+        <symbol id="icon-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </symbol>
+        <symbol id="icon-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" />
+          <rect x="14" y="3" width="7" height="7" />
+          <rect x="14" y="14" width="7" height="7" />
+          <rect x="3" y="14" width="7" height="7" />
+        </symbol>
+        <symbol id="icon-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="6" x2="21" y2="6" />
+          <line x1="8" y1="12" x2="21" y2="12" />
+          <line x1="8" y1="18" x2="21" y2="18" />
+          <line x1="3" y1="6" x2="3.01" y2="6" />
+          <line x1="3" y1="12" x2="3.01" y2="12" />
+          <line x1="3" y1="18" x2="3.01" y2="18" />
+        </symbol>
+        <symbol id="icon-check-square" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 11 12 14 22 4" />
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </symbol>
+        <symbol id="icon-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </symbol>
+        <symbol id="icon-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="21 8 21 21 3 21 3 8" />
+          <rect x="1" y="3" width="22" height="5" />
+          <line x1="10" y1="12" x2="14" y2="12" />
+        </symbol>
+        <symbol id="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10" />
+          <polyline points="1 20 1 14 7 14" />
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+        </symbol>
+        <symbol id="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5" />
+          <line x1="12" y1="1" x2="12" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="23" />
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+          <line x1="1" y1="12" x2="3" y2="12" />
+          <line x1="21" y1="12" x2="23" y2="12" />
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        </symbol>
+        <symbol id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </symbol>
+      </defs>
+    </svg>
   </head>
   <body>
     <header class="topbar">
-      <h1>Bildsprache</h1>
+      <div class="brand-row">
+        <div class="brand">
+          <h1>Bildsprache</h1>
+          <span class="tag">Gallery</span>
+        </div>
+        <button
+          id="theme-toggle"
+          class="btn btn-icon"
+          type="button"
+          aria-label="Toggle theme"
+          title="Toggle theme"
+        >
+          <svg class="icon" aria-hidden="true"><use href="#icon-sun" /></svg>
+        </button>
+      </div>
+
       <div class="filters">
         <label>
           Brand
@@ -28,18 +112,40 @@
         </label>
         <label class="grow">
           Search
-          <input id="filter-q" type="search" placeholder="prompt substring (press /)" />
+          <input id="filter-q" type="search" placeholder="prompt substring" />
         </label>
       </div>
+
       <div class="toolbar">
-        <span class="count"><span id="total">0</span> total</span>
-        <span class="count">selected: <span id="selected-count">0</span></span>
-        <button id="view-grid" type="button" title="Grid (g)">grid</button>
-        <button id="view-list" type="button" title="List (l)">list</button>
-        <button id="select-all" type="button" title="Select all visible (a)">select all</button>
-        <button id="clear-selection" type="button" title="Clear (esc)">clear</button>
-        <button id="download-zip" type="button" disabled>download zip</button>
-        <button id="reindex" type="button" title="Rescan sidecars">reindex</button>
+        <span class="count"><strong id="total">0</strong>&nbsp;total</span>
+        <span class="count">selected&nbsp;<strong id="selected-count">0</strong></span>
+
+        <span class="spacer"></span>
+
+        <button id="view-grid" class="btn" type="button" title="Grid view (g)" aria-pressed="true">
+          <svg class="icon" aria-hidden="true"><use href="#icon-grid" /></svg>
+          Grid
+        </button>
+        <button id="view-list" class="btn" type="button" title="List view (l)" aria-pressed="false">
+          <svg class="icon" aria-hidden="true"><use href="#icon-list" /></svg>
+          List
+        </button>
+        <button id="select-all" class="btn" type="button" title="Select all visible (a)">
+          <svg class="icon" aria-hidden="true"><use href="#icon-check-square" /></svg>
+          Select all
+        </button>
+        <button id="clear-selection" class="btn" type="button" title="Clear (esc)">
+          <svg class="icon" aria-hidden="true"><use href="#icon-x" /></svg>
+          Clear
+        </button>
+        <button id="download-zip" class="btn primary" type="button" disabled>
+          <svg class="icon" aria-hidden="true"><use href="#icon-archive" /></svg>
+          Download ZIP
+        </button>
+        <button id="reindex" class="btn" type="button" title="Rescan sidecars">
+          <svg class="icon" aria-hidden="true"><use href="#icon-refresh" /></svg>
+          Reindex
+        </button>
       </div>
     </header>
 
@@ -49,12 +155,12 @@
         <table>
           <thead>
             <tr>
-              <th>prompt</th>
-              <th>brand</th>
-              <th>date</th>
-              <th>dims</th>
-              <th>model</th>
-              <th>cost</th>
+              <th>Prompt</th>
+              <th>Brand</th>
+              <th>Date</th>
+              <th>Dims</th>
+              <th>Model</th>
+              <th>Cost</th>
               <th></th>
             </tr>
           </thead>
@@ -66,6 +172,13 @@
 
     <footer class="statusbar">
       <span id="status"></span>
+      <span class="kbd-hint">
+        <kbd>g</kbd> grid
+        <kbd>l</kbd> list
+        <kbd>a</kbd> select all
+        <kbd>/</kbd> search
+        <kbd>esc</kbd> clear
+      </span>
     </footer>
 
     <script src="/gallery/static/fflate.min.js"></script>
