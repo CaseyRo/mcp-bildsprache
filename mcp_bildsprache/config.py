@@ -36,14 +36,14 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # MCP server auth
-    mcp_bildsprache_api_key: str = ""
+    mcp_bildsprache_api_key: SecretStr = SecretStr("")
     mcp_bildsprache_public_url: str = ""
 
     # Keycloak OIDC
     keycloak_issuer: str = "https://auth.cdit-works.de/realms/cdit-mcp"
     keycloak_audience: str = "mcp-bildsprache"
     keycloak_client_id: str = "mcp-bildsprache"
-    keycloak_client_secret: str = ""
+    keycloak_client_secret: SecretStr = SecretStr("")
 
     # Gallery (Tailnet-only browse/download UI)
     gallery_enabled: bool = True
@@ -66,13 +66,14 @@ class Settings(BaseSettings):
 
     def ensure_api_key(self) -> str:
         """Return the API key, generating one if not configured."""
-        if self.mcp_bildsprache_api_key:
-            return self.mcp_bildsprache_api_key
+        existing = self.mcp_bildsprache_api_key.get_secret_value()
+        if existing:
+            return existing
 
         from mcp_bildsprache.auth import generate_api_key
 
         key = generate_api_key()
-        self.mcp_bildsprache_api_key = key
+        self.mcp_bildsprache_api_key = SecretStr(key)
         logger.warning("Generated API key: %s (set MCP_BILDSPRACHE_API_KEY to persist)", key)
         return key
 

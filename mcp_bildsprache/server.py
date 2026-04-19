@@ -136,24 +136,21 @@ def _build_auth():
     if settings.transport != "http":
         return None
 
-    import os
-    api_key = (
-        os.getenv("MCP_API_KEY", "")
-        or settings.mcp_bildsprache_api_key
-    )
+    api_key = settings.mcp_bildsprache_api_key.get_secret_value()
     if not api_key:
         raise SystemExit(
-            "MCP_API_KEY (or MCP_BILDSPRACHE_API_KEY) is required in HTTP mode. "
+            "MCP_BILDSPRACHE_API_KEY is required in HTTP mode. "
             "Refusing to start an unauthenticated server."
         )
 
-    if settings.keycloak_client_secret:
+    keycloak_secret = settings.keycloak_client_secret.get_secret_value()
+    if keycloak_secret:
         return create_auth(
             api_key=api_key,
             keycloak_issuer=settings.keycloak_issuer,
             keycloak_audience=settings.keycloak_audience,
             keycloak_client_id=settings.keycloak_client_id,
-            keycloak_client_secret=settings.keycloak_client_secret,
+            keycloak_client_secret=keycloak_secret,
             base_url=settings.base_url,
         )
 
