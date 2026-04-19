@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.11] - 2026-04-19
+
+- chore(deps): refresh uv.lock to clear Dependabot alerts
+
+
 ## [0.3.10] - 2026-04-19
 
 - fix(security): use SecretStr for MCP key + Keycloak client secret
