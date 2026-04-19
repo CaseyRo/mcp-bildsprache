@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.10] - 2026-04-19
+
+- fix(security): use SecretStr for MCP key + Keycloak client secret
+
+
 ## [0.3.9] - 2026-04-18
 
 - feat(gallery): port frontend to CDiT MX-Brutalist design system
