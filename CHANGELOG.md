@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.12] - 2026-04-20
+
+- chore(pkg): add __main__.py and py.typed per MCP Server Standards
+
+
 ## [0.3.11] - 2026-04-19
 
 - chore(deps): refresh uv.lock to clear Dependabot alerts
