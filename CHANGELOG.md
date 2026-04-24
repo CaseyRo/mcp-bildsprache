@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.16] - 2026-04-24
+
+- feat(providers): OpenAI gpt-image-2 provider (CDI-1014 §4)
+
+
 ## [0.3.15] - 2026-04-24
 
 - feat(attribution): wire ai_attribution v1 into generate_image (CDI-1014 §3)
