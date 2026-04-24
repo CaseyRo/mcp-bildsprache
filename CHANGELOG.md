@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.18] - 2026-04-24
+
+- ci: shared-contract drift check (CDI-1014 §2.1)
+
+
 ## [0.3.17] - 2026-04-24
 
 - feat(routing): wire openai + draft flag into generate_image (CDI-1014 §5)
