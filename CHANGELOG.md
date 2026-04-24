@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.17] - 2026-04-24
+
+- feat(routing): wire openai + draft flag into generate_image (CDI-1014 §5)
+
+
 ## [0.3.16] - 2026-04-24
 
 - feat(providers): OpenAI gpt-image-2 provider (CDI-1014 §4)
