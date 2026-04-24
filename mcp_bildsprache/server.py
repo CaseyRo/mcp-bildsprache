@@ -33,7 +33,12 @@ from mcp_bildsprache.providers.gemini import generate_gemini
 from mcp_bildsprache.providers.openai import generate_openai
 from mcp_bildsprache.providers.recraft import generate_recraft
 from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
-from mcp_bildsprache.attribution import build_attribution, format_legacy_cost_estimate
+from mcp_bildsprache.attribution import (
+    build_attribution,
+    format_legacy_cost_estimate,
+    get_contract_state,
+    validate_shared_contract,
+)
 from mcp_bildsprache.types import IdentityPack, ProviderResult
 
 logger = logging.getLogger(__name__)
@@ -189,14 +194,31 @@ from mcp_bildsprache import __version__ as _version  # noqa: E402
 _start_time = datetime.now(_tz.utc)
 
 
+# Fail-fast: load the ai_attribution schema + provider cost table at import
+# time so a broken contract prevents the server from serving, rather than
+# silently emitting degraded attribution per-call.
+try:
+    validate_shared_contract()
+except RuntimeError as _contract_err:  # pragma: no cover — start-time fatal
+    logger.critical("shared contract broken: %s", _contract_err)
+    raise SystemExit(1) from _contract_err
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def _health_check(request: _SReq) -> _SResp:
+    contract = get_contract_state()
+    status = "healthy" if contract["healthy"] else "degraded"
     return _SResp({
-        "status": "healthy",
+        "status": status,
         "service": "mcp-bildsprache",
         "version": _version,
         "upstream_reachable": True,
         "uptime_seconds": int((datetime.now(_tz.utc) - _start_time).total_seconds()),
+        "attribution": {
+            "schema_version": contract["schema_version"],
+            "cost_table_version": contract["cost_table_version"],
+            "providers_available": contract["providers_available"],
+        },
     })
 
 
@@ -413,6 +435,25 @@ async def generate_image(
             logger.warning("Failed to store raw image: %s", e)
 
     result["response_mode"] = "url"
+
+    # CDI-1014 §11.3 — structured log line per image generation.
+    # One JSON line, no prompt/image content. Enables cost aggregation
+    # via Komodo log queries and bildsprache cost trends over time.
+    cost_block = attribution.get("cost", {})
+    logger.info(
+        "event=image_generated "
+        "provider=%s model=%s brand_context=%s amount_eur=%.6f "
+        "tier=%s schema_version=%s draft=%s fallback=%s",
+        attribution.get("provider"),
+        provider_result.model,
+        context or "none",
+        float(cost_block.get("amount_eur") or 0.0),
+        cost_block.get("tier", "standard"),
+        attribution.get("schema_version"),
+        draft,
+        fallback_used,
+    )
+
     return result
 
 

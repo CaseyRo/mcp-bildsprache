@@ -279,3 +279,54 @@ def format_legacy_cost_estimate(payload: dict[str, Any]) -> str:
     if eur is None:
         return "~"
     return f"€{float(eur):.4f}"
+
+
+def validate_shared_contract() -> None:
+    """Eager-load schema + cost table. Raises RuntimeError if either fails.
+
+    Called at server startup for fail-fast behavior — a broken contract
+    should prevent the server from booting, not silently emit degraded
+    attribution at runtime.
+    """
+    try:
+        _get_cost_table()
+    except Exception as e:
+        raise RuntimeError(
+            f"cost table load failed — refuse to start: {e}"
+        ) from e
+    schema = _get_schema()
+    if not schema:
+        raise RuntimeError(
+            "ai_attribution schema load failed — refuse to start"
+        )
+
+
+def get_contract_state() -> dict[str, Any]:
+    """Return a compact summary of loaded contract state for /health."""
+    try:
+        table = _get_cost_table()
+        cost_table_version = table.get("table_version", "unknown")
+        providers_available = sorted(
+            k for k in table.keys() if k not in ("fx", "table_version", "snapshot_date")
+        )
+    except Exception:
+        cost_table_version = "load-failed"
+        providers_available = []
+
+    schema_version = SCHEMA_VERSION
+    try:
+        schema = _get_schema()
+        if not schema:
+            schema_version = "load-failed"
+    except Exception:
+        schema_version = "load-failed"
+
+    healthy = (
+        cost_table_version != "load-failed" and schema_version != "load-failed"
+    )
+    return {
+        "schema_version": schema_version,
+        "cost_table_version": cost_table_version,
+        "providers_available": providers_available,
+        "healthy": healthy,
+    }
