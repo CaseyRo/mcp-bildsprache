@@ -141,7 +141,7 @@ def _per_image(row: dict[str, Any], tier: Tier, image_format: Literal["raster", 
     elif tier == "batch" and "usd_batch" in row:
         return {"per_image": float(row["usd_batch"])}
     elif row.get("usd") is None:
-        raise ValueError(f"Model row missing USD price — populate the cost table before billing")
+        raise ValueError("Model row missing USD price — populate the cost table before billing")
     else:
         unit = float(row["usd"])
     breakdown = {"per_image": unit}
