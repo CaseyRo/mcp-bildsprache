@@ -106,6 +106,36 @@ class TestRouteModelReferenceAware:
     def test_non_vector_platform_still_flux_with_references(self):
         assert route_model(platform="blog-hero", has_references=True) == "flux"
 
+
+class TestRouteModelOpenAI:
+    """CDI-1014 §5: OpenAI provider routing."""
+
+    def test_explicit_openai_hint(self):
+        assert route_model(model_hint="openai") == "openai"
+
+    def test_gpt_image_2_hint(self):
+        assert route_model(model_hint="gpt-image-2") == "openai"
+
+    def test_gpt_image_1_mini_hint(self):
+        assert route_model(model_hint="gpt-image-1-mini") == "openai"
+
+    def test_gpt_image_1_5_hint(self):
+        assert route_model(model_hint="gpt-image-1.5") == "openai"
+
+    def test_openai_never_auto_selected(self):
+        # Default path (no model hint, no special platform) must NOT pick openai
+        # per the spec — callers opt in explicitly.
+        assert route_model() != "openai"
+
+    def test_openai_never_auto_selected_for_brand_context(self):
+        for ctx in ("@casey.berlin", "@cdit", "@storykeep", "@nah", "@yorizon"):
+            assert route_model(context=ctx) != "openai"
+
+    def test_openai_never_auto_selected_for_vector_platform(self):
+        # Icon/svg/logo still go to Recraft, not OpenAI, since Recraft owns vectors.
+        assert route_model(platform="icon") == "recraft"
+        assert route_model(platform="svg-logo") == "recraft"
+
     def test_non_reference_routing_unchanged(self):
         """Every existing case should return the same thing with has_references=False."""
         # These pairs must match the pre-change behaviour.

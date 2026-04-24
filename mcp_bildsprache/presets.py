@@ -104,25 +104,38 @@ def route_model(
 ) -> str:
     """Route to the optimal image generation provider.
 
-    Returns a provider key: "flux", "gemini", or "recraft".
+    Returns a provider key: "flux", "gemini", "recraft", or "openai".
     The provider itself handles model selection internally.
 
     Priority:
     1. Explicit model_hint overrides everything (including has_references)
-    2. When has_references=True, never auto-route to Recraft — reference
-       images would be silently dropped. Falls through to FLUX instead.
+    2. When has_references=True, never auto-route to Recraft or OpenAI —
+       neither accepts reference images. Falls through to FLUX.
     3. Vector/icon/illustration → Recraft V4 (unique SVG capability)
     4. Everything else → FLUX (FLUX.2 Max by default)
+
+    NOTE: OpenAI (gpt-image-2) is NOT auto-routed as a default. Per
+    CDI-1014 §4, it must be opted into via model_hint ("gpt-image-2",
+    "gpt-image-1.5", "gpt-image-1-mini") until the gallery has empirically
+    validated per-brand defaults. Hands-on signal is that gpt-image-2 has
+    strong typography and sibling-series consistency — reach for it when
+    those matter.
     """
     if model_hint:
-        # Allow both provider keys ("flux") and specific model IDs ("flux-2-max")
+        # Allow both provider keys ("flux", "openai") and specific model IDs.
         if model_hint.startswith("flux"):
             return "flux"
         if model_hint.startswith("recraft"):
             return "recraft"
         if model_hint.startswith("gemini"):
             return "gemini"
-        raise ValueError(f"Unknown model: {model_hint}. Valid models: gemini, flux, flux-2-max, flux-2-pro, flux-kontext-pro, flux-pro-1.1, recraft")
+        if model_hint.startswith("gpt-image") or model_hint == "openai":
+            return "openai"
+        raise ValueError(
+            f"Unknown model: {model_hint}. Valid: gemini, flux, flux-2-max, "
+            "flux-2-pro, flux-kontext-pro, flux-pro-1.1, recraft, openai, "
+            "gpt-image-2, gpt-image-1.5, gpt-image-1-mini"
+        )
 
     # Recraft for vectors/icons — unique capability FLUX can't do.
     # Skipped when references are present since Recraft would drop them.
