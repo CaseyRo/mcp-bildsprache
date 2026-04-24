@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.14] - 2026-04-24
+
+- fix: read __version__ from package metadata instead of hardcoding
+
+
 ## [0.3.13] - 2026-04-20
 
 - ci(deps): enable Dependabot weekly updates
