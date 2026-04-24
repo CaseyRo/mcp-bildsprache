@@ -17,9 +17,15 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = SecretStr("")
     bfl_api_key: SecretStr = SecretStr("")
     recraft_api_key: SecretStr = SecretStr("")
+    openai_api_key: SecretStr = SecretStr("")
 
     # Recraft tier (free vs pro — affects license warnings)
     recraft_tier: Literal["free", "pro"] = "free"
+
+    # OpenAI image-generation model IDs (config so we can pin a snapshot like
+    # gpt-image-2-2026-04-21 without a code change).
+    openai_image_model: str = "gpt-image-2"
+    openai_image_model_draft: str = "gpt-image-1-mini"
 
     # Image hosting
     enable_hosting: bool = True
@@ -61,6 +67,8 @@ class Settings(BaseSettings):
             missing.append("BFL_API_KEY")
         if not self.recraft_api_key.get_secret_value():
             missing.append("RECRAFT_API_KEY")
+        if not self.openai_api_key.get_secret_value():
+            missing.append("OPENAI_API_KEY")
         if missing:
             logger.warning("Missing API keys: %s — those providers will be unavailable", ", ".join(missing))
 
