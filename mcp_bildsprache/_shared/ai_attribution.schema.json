@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cdit-works.de/schemas/ai_attribution/v1.json",
+  "title": "AI Attribution",
+  "description": "Canonical attribution payload for AI-generated artifacts across CDiT content skills (Bildsprache, Klartext, Writings). See docs/ai-attribution.md for examples and field semantics.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider",
+    "model",
+    "model_version",
+    "kind",
+    "tokens",
+    "cost",
+    "prompt_anchor",
+    "prompt_hash",
+    "generated_at"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Major version of this schema. Consumers pinned to v1 must refuse to parse payloads with a different major version."
+    },
+    "provider": {
+      "type": "string",
+      "enum": ["openai", "bfl", "gemini", "recraft", "anthropic", "deepl", "other"],
+      "description": "Upstream provider identifier."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Provider-canonical model ID (e.g. gpt-image-2, flux-2-flex, gemini-3.1-flash-image-preview, recraftv4)."
+    },
+    "model_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Provider-published version or dated snapshot (e.g. gpt-image-2-2026-04-21). May equal model when the provider does not publish snapshots."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["image", "text", "audio", "video"],
+      "description": "Modality of the generated artifact."
+    },
+    "tokens": {
+      "type": "object",
+      "required": ["input", "output", "units"],
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Total input tokens reported by the provider. Null when the provider does not report tokens (e.g. BFL, Recraft)."
+        },
+        "output": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Total output tokens reported by the provider. Null when not reported."
+        },
+        "units": {
+          "type": "string",
+          "enum": ["tokens", "characters"],
+          "description": "Unit for input/output counts."
+        },
+        "breakdown": {
+          "type": "object",
+          "additionalProperties": { "type": ["integer", "null"], "minimum": 0 },
+          "description": "Provider-specific sub-counts. Common keys: text_input, image_input, cached_input, image_output, partial_image_overhead, thinking."
+        }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "required": [
+        "amount_eur",
+        "method",
+        "source_currency",
+        "source_amount",
+        "fx_rate"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "amount_eur": {
+          "type": "number",
+          "minimum": 0,
+          "description": "EUR-equivalent cost estimate. Derived from source_amount * fx_rate."
+        },
+        "method": {
+          "type": "string",
+          "description": "Pricing table identifier that produced this cost (e.g. table-v1)."
+        },
+        "source_currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 currency code of the source amount."
+        },
+        "source_amount": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Cost in the provider billing currency."
+        },
+        "fx_rate": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "FX rate used to convert source_amount to amount_eur."
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["standard", "batch", "flex"],
+          "description": "Billing tier applied, if relevant to the provider."
+        },
+        "breakdown_usd": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0 },
+          "description": "Per-component USD breakdown. Common keys: input, cached_input, output, per_image."
+        }
+      }
+    },
+    "params": {
+      "type": "object",
+      "description": "Exact generation parameters used, enough to reproduce the call. Keys depend on provider (e.g. size, quality, output_format for images).",
+      "additionalProperties": true
+    },
+    "prompt_anchor": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Author-provided prompt text. Used as the caption/attribution source — this is what the author intended, independent of any provider auto-revision."
+    },
+    "prompt_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "SHA-256 hash of the effective prompt sent to the provider, prefixed with 'sha256:'."
+    },
+    "revised_prompt": {
+      "type": "string",
+      "description": "Provider-revised prompt text when the provider rewrote the input (e.g. OpenAI Responses API). Debug/transparency only — captions should render prompt_anchor."
+    },
+    "sources": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "additionalProperties": true,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["stolperstein", "url", "document", "reference_image"]
+          },
+          "id": { "type": "string" },
+          "href": { "type": "string", "format": "uri" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "title": { "type": "string" }
+        }
+      },
+      "description": "References used to produce this artifact. Empty array is valid when no sources were used."
+    },
+    "generated_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "ISO 8601 UTC timestamp. Must end in Z — non-UTC timestamps are a validation error."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "synthid": {
+          "type": "boolean",
+          "description": "True when the provider stamps a SynthID watermark on output (currently only Gemini)."
+        },
+        "c2pa": {
+          "type": "boolean",
+          "description": "True when the provider ships C2PA-signed output. False for all current providers."
+        },
+        "exif_signature": {
+          "type": "string",
+          "description": "Identifier of the Bildsprache EXIF/XMP payload version stamped on images (e.g. bildsprache-v1). Absent for non-image artifacts."
+        }
+      },
+      "description": "Upstream provenance signals. Report what the provider actually stamped — do not fabricate."
+    },
+    "language": {
+      "type": "string",
+      "description": "BCP-47 language tag of the generated artifact when applicable (e.g. de, en). Optional in v1; may become required in v1.1."
+    }
+  }
+}

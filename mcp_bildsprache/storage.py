@@ -28,6 +28,7 @@ def store_image(
     brand_context: str | None = None,
     fallback_used: bool = False,
     original_model: str | None = None,
+    attribution: dict | None = None,
 ) -> str:
     """Store a processed WebP image and return its hosted URL.
 
@@ -61,19 +62,33 @@ def store_image(
         except OSError as e:
             raise StorageError(f"Failed to store image at {file_path}: {e}") from e
 
-    # Write JSON sidecar
-    sidecar = _build_sidecar(
-        prompt=prompt,
-        width=width,
-        height=height,
-        model=model,
-        cost_estimate=cost_estimate,
-        brand_context=brand_context,
-        fallback_used=fallback_used,
-        original_model=original_model,
-        file_size=len(image_data),
-        relative_path=f"{brand_prefix}/{filename}",
-    )
+    # Write JSON sidecar. When an attribution payload is provided (CDI-1014),
+    # it becomes the sidecar (schema-compliant ai_attribution v1) augmented
+    # with file-specific fields. Otherwise fall back to the legacy shape.
+    if attribution is not None:
+        sidecar = dict(attribution)
+        sidecar.setdefault("brand_context", brand_context)
+        sidecar["file_size_bytes"] = len(image_data)
+        sidecar["relative_path"] = f"{brand_prefix}/{filename}"
+        sidecar["hosted_url"] = (
+            f"{settings.image_domain.rstrip('/')}/{brand_prefix}/{filename}"
+        )
+        if fallback_used:
+            sidecar["fallback_used"] = True
+            sidecar["original_model"] = original_model
+    else:
+        sidecar = _build_sidecar(
+            prompt=prompt,
+            width=width,
+            height=height,
+            model=model,
+            cost_estimate=cost_estimate,
+            brand_context=brand_context,
+            fallback_used=fallback_used,
+            original_model=original_model,
+            file_size=len(image_data),
+            relative_path=f"{brand_prefix}/{filename}",
+        )
     sidecar_path = file_path.with_suffix(".json")
     try:
         sidecar_path.write_text(json.dumps(sidecar, indent=2))

@@ -14,6 +14,8 @@ dependencies = [
     "pillow>=11.0.0",
     "piexif>=1.1.3",
     "python-slugify>=8.0.0",
+    "pyyaml>=6.0",
+    "jsonschema>=4.0",
 ]
 
 [project.scripts]
@@ -22,6 +24,13 @@ mcp-bildsprache = "mcp_bildsprache.server:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_bildsprache"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"mcp_bildsprache/_shared/ai_attribution.schema.json" = "mcp_bildsprache/_shared/ai_attribution.schema.json"
+"mcp_bildsprache/_shared/provider_costs.v1.yaml" = "mcp_bildsprache/_shared/provider_costs.v1.yaml"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

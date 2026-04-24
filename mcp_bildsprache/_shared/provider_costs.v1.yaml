@@ -1,0 +1,142 @@
+# Provider pricing table — v1
+# Snapshot date: 2026-04-24. Verified against provider docs at creation time.
+# Pinned into ai_attribution output via cost.method = "table-v1".
+# Refresh cadence: quarterly. FX snapshot is not live.
+#
+# Modes:
+#   per-token-usage — cost is computed from the provider's usage block
+#                     (input/cached_input/output tokens at the listed rates)
+#   per-image       — cost is the listed USD per generated image
+#   per-token       — cost is per 1M tokens, used for text models
+#
+# Cost math lives in shared/compute_cost.py. Do not inline math in provider modules.
+
+table_version: "1"
+snapshot_date: "2026-04-24"
+
+openai:
+  # All gpt-image-* models priced per 1M tokens. Output tokens == image tokens.
+  # Authoritative: read usage.input_tokens / usage.output_tokens from each response.
+  gpt-image-2:
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 8.00
+    usd_per_1m_cached_input_tokens: 2.00
+    usd_per_1m_output_tokens: 30.00
+    batch_discount: 0.50             # batch tier: $4 in / $15 out
+    partial_image_tokens: 100        # each streamed partial adds this to output tokens
+  gpt-image-1.5:
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 8.00
+    usd_per_1m_cached_input_tokens: 2.00
+    usd_per_1m_output_tokens: 32.00
+    batch_discount: 0.50
+  gpt-image-1-mini:                   # cheap draft tier — ~3.75x cheaper output than gpt-image-2
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 2.50
+    usd_per_1m_cached_input_tokens: 0.25
+    usd_per_1m_output_tokens: 8.00
+    batch_discount: 0.50
+
+bfl:
+  # FLUX family. BFL does not expose usage tokens — priced per image.
+  # USD values observed in mcp-bildsprache/providers/bfl.py FLUX_MODELS table
+  # (the source of truth for what BFL charges us per generation).
+  flux-2-max:
+    mode: per-image
+    kind: image
+    usd: 0.07
+  flux-2-pro:
+    mode: per-image
+    kind: image
+    usd: 0.03
+  flux-kontext-pro:                   # reference-locked single-image editing
+    mode: per-image
+    kind: image
+    usd: 0.04
+  flux-pro-1.1:                       # legacy fallback — retained for now
+    mode: per-image
+    kind: image
+    usd: 0.04
+  # Models not yet wired in bildsprache — placeholders for future adoption.
+  flux-2-flex:
+    mode: per-image
+    kind: image
+    usd: null                         # TODO populate when adopted
+  flux-2-klein-9b:                    # fast/lightweight draft tier
+    mode: per-image
+    kind: image
+    usd: null                         # TODO populate when adopted
+  flux-1.1-pro-ultra:
+    mode: per-image
+    kind: image
+    usd: null                         # TODO populate when adopted
+  flux-1-fill-pro:                    # inpainting / outpainting
+    mode: per-image
+    kind: image
+    usd: null                         # TODO populate when adopted
+
+gemini:
+  # Nano Banana 2 (current default)
+  gemini-3.1-flash-image-preview:
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 0.50
+    usd_per_1m_output_tokens: 60.00
+    # Reference output-token counts per image (from provider docs):
+    output_tokens_per_image:
+      "512":  747          # ~$0.045
+      "1024": 1120         # ~$0.067
+      "2048": 1120         # ~$0.067 (same as 1K)
+      "4096": 2520         # ~$0.151
+    batch_discount: 0.50
+    watermark: synthid
+  # Nano Banana Pro — higher quality, more expensive; use for complex multi-reference / grounded generation
+  gemini-3-pro-image-preview:
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 2.00
+    usd_per_1m_output_tokens: 120.00
+    output_tokens_per_image:
+      "1024": 1120         # ~$0.134
+      "2048": 1120         # ~$0.134
+      "4096": 2000         # ~$0.240
+    batch_discount: 0.50
+    watermark: synthid
+  # Older flat-rate model, kept for high-volume/low-latency (draft tier)
+  gemini-2.5-flash-image:
+    mode: per-image
+    kind: image
+    usd: 0.039
+    usd_batch: 0.0195      # 50% batch discount applied
+    watermark: synthid
+
+recraft:
+  # V4 is the 2026 default. V3 kept for text-in-image + artistic control. V2 for exclusive styles.
+  recraftv4:
+    mode: per-image
+    kind: image
+    usd_raster: 0.04
+    usd_vector: 0.08
+  recraftv4-pro:                      # print-ready / large-format
+    mode: per-image
+    kind: image
+    usd_raster: 0.25
+    usd_vector: 0.30
+  recraftv3:
+    mode: per-image
+    kind: image
+    usd_raster: 0.04
+    usd_vector: 0.08
+  recraftv2:
+    mode: per-image
+    kind: image
+    usd_raster: 0.022
+    usd_vector: 0.044
+
+fx:
+  # Quarterly-refreshed EUR snapshot. See docs/ai-attribution.md for refresh policy.
+  usd_eur: 0.92
+  snapshot_date: "2026-04-01"

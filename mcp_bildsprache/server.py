@@ -32,6 +32,7 @@ from mcp_bildsprache.providers.bfl import generate_bfl
 from mcp_bildsprache.providers.gemini import generate_gemini
 from mcp_bildsprache.providers.recraft import generate_recraft
 from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
+from mcp_bildsprache.attribution import build_attribution, format_legacy_cost_estimate
 from mcp_bildsprache.types import IdentityPack, ProviderResult
 
 logger = logging.getLogger(__name__)
@@ -321,13 +322,29 @@ async def generate_image(
             include_dogs is not None,
         )
 
-    # Build base response
+    # Build the canonical ai_attribution payload (CDI-1014 §3). Done before
+    # the response dict so we can derive the legacy cost_estimate from it.
+    attribution = build_attribution(
+        provider_result=provider_result,
+        prompt_anchor=prompt,
+        effective_prompt=enhanced_prompt,
+        brand_context=context,
+        params={
+            "platform": platform,
+            "dimensions": f"{w}x{h}",
+        },
+    )
+
+    # Build base response. `cost_estimate` stays for backward-compat but is
+    # now derived from attribution.cost.amount_eur so it reflects the real
+    # EUR figure, not the provider's raw USD string.
     result: dict = {
         "model": provider_result.model,
-        "cost_estimate": provider_result.cost_estimate,
+        "cost_estimate": format_legacy_cost_estimate(attribution),
         "brand_context": context,
         "platform": platform,
         "dimensions": f"{w}x{h}",
+        "ai_attribution": attribution,
     }
 
     if fallback_used:
@@ -354,6 +371,7 @@ async def generate_image(
         brand_context=context,
         fallback_used=fallback_used,
         original_model=original_model,
+        attribution=attribution,
     )
     result["hosted_url"] = hosted_url
 
