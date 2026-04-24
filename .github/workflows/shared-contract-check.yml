@@ -1,0 +1,85 @@
+name: Shared contract drift check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp_bildsprache/_shared/**'
+      - '.github/workflows/shared-contract-check.yml'
+  pull_request:
+    paths:
+      - 'mcp_bildsprache/_shared/**'
+      - '.github/workflows/shared-contract-check.yml'
+  schedule:
+    # Nightly — catches upstream drift even on days when nobody touches _shared/.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+# The canonical contract lives in CaseyRo/CDiT-marketingskills (private) on `shared/`.
+# Any local copy under mcp_bildsprache/_shared/ must match the upstream file
+# byte-for-byte. Drift fails the workflow.
+#
+# To enable upstream drift detection, add a fine-grained PAT with repo:read
+# on CaseyRo/CDiT-marketingskills as the `SHARED_CONTRACT_READ_TOKEN` secret.
+# Without the secret, the job falls back to a local structural check (valid
+# JSON / YAML / Python) and emits a warning.
+env:
+  CANONICAL_REPO: CaseyRo/CDiT-marketingskills
+  CANONICAL_BRANCH: main
+  CANONICAL_PATH: shared
+  LOCAL_PATH: mcp_bildsprache/_shared
+  FILES: "ai_attribution.schema.json provider_costs.v1.yaml compute_cost.py"
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Local structural check (always)
+        run: |
+          python3 -c "import json; json.load(open('${LOCAL_PATH}/ai_attribution.schema.json'))"
+          python3 -c "import yaml; yaml.safe_load(open('${LOCAL_PATH}/provider_costs.v1.yaml'))" \
+            || pip install pyyaml --quiet && python3 -c "import yaml; yaml.safe_load(open('${LOCAL_PATH}/provider_costs.v1.yaml'))"
+          python3 -c "import ast; ast.parse(open('${LOCAL_PATH}/compute_cost.py').read())"
+          echo "Local _shared files are structurally valid."
+
+      - name: Fetch canonical files (if token present)
+        id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.SHARED_CONTRACT_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::SHARED_CONTRACT_READ_TOKEN not set — skipping upstream drift check. Only local structural validation ran."
+            echo "have_token=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p /tmp/canonical
+          for f in $FILES; do
+            url="https://api.github.com/repos/${CANONICAL_REPO}/contents/${CANONICAL_PATH}/${f}?ref=${CANONICAL_BRANCH}"
+            echo "GET $url"
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.raw" \
+              -o "/tmp/canonical/$f" "$url"
+          done
+          echo "have_token=true" >> "$GITHUB_OUTPUT"
+
+      - name: Diff against canonical (if fetched)
+        if: steps.fetch.outputs.have_token == 'true'
+        run: |
+          ok=true
+          for f in $FILES; do
+            if ! diff -u "/tmp/canonical/$f" "${LOCAL_PATH}/$f"; then
+              echo "::error file=${LOCAL_PATH}/${f}::Drift detected vs canonical ${CANONICAL_REPO}/${CANONICAL_PATH}/${f}. Refresh the mirror."
+              ok=false
+            fi
+          done
+          if [ "$ok" = "false" ]; then
+            echo ""
+            echo "To refresh: copy from CDiT-marketingskills/shared/ into ${LOCAL_PATH}/ and commit."
+            exit 1
+          fi
+          echo "Shared contract in sync with ${CANONICAL_REPO}@${CANONICAL_BRANCH}."
