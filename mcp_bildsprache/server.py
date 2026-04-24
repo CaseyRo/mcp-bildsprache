@@ -30,6 +30,7 @@ from mcp_bildsprache.presets import (
 )
 from mcp_bildsprache.providers.bfl import generate_bfl
 from mcp_bildsprache.providers.gemini import generate_gemini
+from mcp_bildsprache.providers.openai import generate_openai
 from mcp_bildsprache.providers.recraft import generate_recraft
 from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
 from mcp_bildsprache.attribution import build_attribution, format_legacy_cost_estimate
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 Model = Literal[
     "gemini", "flux", "flux-2-max", "flux-2-pro",
     "flux-kontext-pro", "flux-pro-1.1", "recraft",
+    "openai", "gpt-image-2", "gpt-image-1.5", "gpt-image-1-mini",
 ]
 BrandContext = Literal["@casey.berlin", "@cdit", "@storykeep", "@nah", "@yorizon"]
 Platform = Literal[
@@ -59,22 +61,28 @@ PROVIDERS = {
     "gemini": generate_gemini,
     "flux": generate_bfl,
     "recraft": generate_recraft,
+    "openai": generate_openai,
 }
 
 FALLBACKS = {
     "flux": "gemini",
     "gemini": "flux",
     "recraft": "gemini",
+    # OpenAI falls back to FLUX when the OpenAI call fails, rather than
+    # jumping providers unpredictably. FLUX is our best general-purpose
+    # path and is always configured in production.
+    "openai": "flux",
 }
 
 # When references are present we must not fall back to a text-only path.
-# Both flux and gemini are reference-capable; recraft is not and should
-# never be picked in this branch (and `route_model(has_references=True)`
-# prevents it from being auto-selected in the first place).
+# flux and gemini are reference-capable; recraft and openai are not and
+# should never be picked in this branch (and `route_model(has_references=True)`
+# prevents them from being auto-selected in the first place).
 REFERENCE_FALLBACKS = {
     "flux": "gemini",
     "gemini": "flux",
     "recraft": "flux",
+    "openai": "flux",
 }
 
 
@@ -208,6 +216,7 @@ async def generate_image(
     raw: bool = False,
     reference_images: list[bytes] | None = None,
     include_dogs: bool | None = None,
+    draft: bool = False,
 ) -> dict:
     """[image] Generate a brand-aware image.
 
@@ -219,7 +228,10 @@ async def generate_image(
         prompt: Description of the image to generate.
         context: Brand context (@casey.berlin, @cdit, @storykeep, @nah, @yorizon).
                  If omitted, no brand preset is injected.
-        model: Force a specific model (gemini, flux, flux-2-pro, recraft). Auto-routed if omitted.
+        model: Force a specific model (gemini, flux, flux-2-pro, recraft,
+                openai, gpt-image-2, gpt-image-1-mini). Auto-routed if omitted.
+                NOTE: openai/gpt-image-* is NOT auto-selected — must be
+                explicitly requested via this parameter.
         platform: Target platform (linkedin-post, blog-hero, etc.) for auto-sizing.
         dimensions: Explicit dimensions as 'WxH' (e.g., '1200x1200'). Overrides platform sizing.
         mood: Emotional register for the image (e.g., 'contemplative', 'energetic').
@@ -232,6 +244,11 @@ async def generate_image(
             None = use manifest rules (default), True = force-include dog
             slots, False = suppress them. Ignored when ``context`` is not
             ``@casey.berlin`` or no identity pack is loaded.
+        draft: If true, route to each provider's cheap tier:
+                openai → gpt-image-1-mini (~3.75x cheaper output),
+                flux → flux-pro-1.1 (falls back to legacy if flux-2 fails),
+                gemini → gemini-2.5-flash-image (flat-rate tier).
+                Trades quality for cost — good for iteration + gallery runs.
     """
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
@@ -294,6 +311,13 @@ async def generate_image(
         kwargs: dict = {}
         if has_refs:
             kwargs["reference_images"] = refs_bytes
+        if provider_key == "openai":
+            # OpenAI provider accepts draft to route to gpt-image-1-mini.
+            # If the caller pinned an explicit gpt-image-* via model, pass it through.
+            kwargs["draft"] = draft
+            if model_id and model_id.startswith("gpt-image"):
+                kwargs["model"] = model_id
+            return await provider_fn(enhanced_prompt, w, h, **kwargs)
         if provider_key == "flux" and model_id:
             return await provider_fn(enhanced_prompt, w, h, model=model_id, **kwargs)
         return await provider_fn(enhanced_prompt, w, h, **kwargs)
