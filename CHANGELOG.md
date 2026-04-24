@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.15] - 2026-04-24
+
+- feat(attribution): wire ai_attribution v1 into generate_image (CDI-1014 §3)
+
+
 ## [0.3.14] - 2026-04-24
 
 - fix: read __version__ from package metadata instead of hardcoding
