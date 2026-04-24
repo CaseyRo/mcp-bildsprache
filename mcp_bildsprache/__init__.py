@@ -1,3 +1,8 @@
 """mcp-bildsprache package."""
 
-__version__ = "0.3.5"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("mcp-bildsprache")
+except PackageNotFoundError:
+    __version__ = "unknown"
