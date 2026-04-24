@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.19] - 2026-04-24
+
+- feat(hygiene): /health + fail-fast + structured cost log (CDI-1014 §11)
+
+
 ## [0.3.18] - 2026-04-24
 
 - ci: shared-contract drift check (CDI-1014 §2.1)
