@@ -313,10 +313,45 @@ def get_loaded_packs() -> dict[str, IdentityPack]:
 
 
 def get_pack_for_context(context: str | None) -> IdentityPack | None:
-    """Look up an identity pack for a brand context (e.g. "@casey.berlin").
+    """Look up an identity pack for a brand context.
 
-    Returns ``None`` when the context is falsy, unknown, or has no pack.
+    Accepts the canonical bare slug (``casey-berlin``) AND legacy variants
+    (``@casey.berlin``, ``casey.berlin``, etc). Tries the input as-is
+    first, then a few normalisation passes against the loader's actual
+    pack keys. Returns ``None`` when no variant matches.
     """
     if not context:
         return None
-    return _PACKS.get(context)
+
+    # Direct hit (covers the legacy "@casey.berlin" form the loader produces).
+    pack = _PACKS.get(context)
+    if pack is not None:
+        return pack
+
+    # Try the bare and @-prefixed legacy forms derived via the alias map.
+    from mcp_bildsprache.brands import normalize_brand
+
+    canonical = normalize_brand(context)
+    if canonical:
+        for candidate in (canonical, f"@{canonical}", _legacy_form(canonical)):
+            if candidate is None:
+                continue
+            pack = _PACKS.get(candidate)
+            if pack is not None:
+                return pack
+    return None
+
+
+def _legacy_form(canonical: str) -> str | None:
+    """Map a canonical bare slug to the legacy ``@``-prefixed key the loader emits.
+
+    e.g. ``casey-berlin`` → ``@casey.berlin``, ``cdit-works`` → ``@cdit-works.de``.
+    Returns ``None`` for unknown canonicals.
+    """
+    return {
+        "casey-berlin": "@casey.berlin",
+        "cdit-works": "@cdit-works.de",
+        "storykeep": "@storykeep",
+        "nah": "@nah",
+        "yorizon": "@yorizon",
+    }.get(canonical)

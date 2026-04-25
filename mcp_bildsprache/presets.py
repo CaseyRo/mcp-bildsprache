@@ -81,9 +81,32 @@ PLATFORM_SIZES: dict[str, tuple[int, int]] = {
 
 
 def get_preset(context: str) -> str:
-    """Get the brand visual preset for a context. Falls back to cdit-works.de."""
-    # Normalize context name
-    normalized = context.lower().strip().lstrip("@")
+    """Get the brand visual preset for a context. Falls back to cdit-works.de.
+
+    Accepts canonical bare slugs (``casey-berlin``, ``cdit-works``, ...) AND
+    legacy variants (``@cdit``, ``casey.berlin``, ...). Normalisation is
+    handled by ``mcp_bildsprache.brands.normalize_brand``; the existing
+    substring fuzzy-match below still catches anything the alias map
+    doesn't.
+    """
+    from mcp_bildsprache.brands import normalize_brand
+
+    canonical = normalize_brand(context) or context
+    # Direct hit on canonical → matching internal PRESETS key.
+    canonical_to_internal = {
+        "casey-berlin": "casey.berlin",
+        "cdit-works": "cdit-works.de",
+        "storykeep": "storykeep",
+        "nah": "nah",
+        "yorizon": "yorizon",
+    }
+    internal_key = canonical_to_internal.get(canonical)
+    if internal_key and internal_key in PRESETS:
+        return PRESETS[internal_key]
+
+    # Fall back to substring fuzzy match for anything else (e.g. unknown
+    # variants we haven't aliased yet).
+    normalized = (canonical or context).lower().strip().lstrip("@")
     for key, preset in PRESETS.items():
         if normalized in key or key in normalized:
             return preset
