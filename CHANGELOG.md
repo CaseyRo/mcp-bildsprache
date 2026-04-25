@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.21] - 2026-04-25
+
+- chore(compose): pass OPENAI_API_KEY + model overrides to container
+
+
 ## [0.3.20] - 2026-04-25
 
 - feat(brands): canonical bare-slug aliasing across the fleet (CDI-1041)
