@@ -48,7 +48,13 @@ Model = Literal[
     "flux-kontext-pro", "flux-pro-1.1", "recraft",
     "openai", "gpt-image-2", "gpt-image-1.5", "gpt-image-1-mini",
 ]
-BrandContext = Literal["@casey.berlin", "@cdit", "@storykeep", "@nah", "@yorizon"]
+BrandContext = Literal[
+    # Canonical bare-hyphenated slugs (CDI-1041 cross-skill alignment)
+    "casey-berlin", "cdit-works", "storykeep", "nah", "yorizon",
+    # Legacy variants — kept for backward-compat; normalised internally
+    # via mcp_bildsprache.brands.normalize_brand.
+    "@casey.berlin", "@cdit", "@cdit-works", "@storykeep", "@nah", "@yorizon",
+]
 Platform = Literal[
     "linkedin-post",
     "linkedin-article",
@@ -248,8 +254,11 @@ async def generate_image(
 
     Args:
         prompt: Description of the image to generate.
-        context: Brand context (@casey.berlin, @cdit, @storykeep, @nah, @yorizon).
-                 If omitted, no brand preset is injected.
+        context: Brand context. Canonical bare slug:
+                 ``casey-berlin``, ``cdit-works``, ``storykeep``, ``nah``,
+                 ``yorizon``. Legacy variants ``@cdit``, ``@casey.berlin``,
+                 etc. are still accepted and normalised. If omitted, no
+                 brand preset is injected.
         model: Force a specific model (gemini, flux, flux-2-pro, recraft,
                 openai, gpt-image-2, gpt-image-1-mini). Auto-routed if omitted.
                 NOTE: openai/gpt-image-* is NOT auto-selected — must be
@@ -317,7 +326,10 @@ async def generate_image(
     parts = []
     if context:
         parts.append(get_preset(context))
-        if used_identity_pack and context == "@casey.berlin":
+        # Casey composition clause fires for any casey-berlin variant
+        # (canonical or legacy @casey.berlin).
+        from mcp_bildsprache.brands import normalize_brand as _normalize_brand
+        if used_identity_pack and _normalize_brand(context) == "casey-berlin":
             parts.append(CASEY_COMPOSITION_CLAUSE)
     parts.append(prompt)
     if mood:
