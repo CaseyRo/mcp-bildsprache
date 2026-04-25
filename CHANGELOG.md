@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.20] - 2026-04-25
+
+- feat(brands): canonical bare-slug aliasing across the fleet (CDI-1041)
+
+
 ## [0.3.19] - 2026-04-24
 
 - feat(hygiene): /health + fail-fast + structured cost log (CDI-1014 §11)
