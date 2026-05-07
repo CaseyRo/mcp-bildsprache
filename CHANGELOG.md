@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.22] - 2026-05-07
+
+- ops(docker): add log rotation (10m/3 files) to cap unbounded json-file logs
+
+
 ## [0.3.21] - 2026-04-25
 
 - chore(compose): pass OPENAI_API_KEY + model overrides to container
