@@ -161,3 +161,7 @@ Stdio mode skips auth entirely.
 ## Production deployment
 
 The server runs on the `ubuntu-smurf-mirror` host as a Docker compose stack, port `8007` → container `8000`, image hosted at `https://img.cdit-works.de`, MCP endpoint at `https://bildsprache.cdit-dev.de/mcp`. `FASTMCP_HOME=/data/fastmcp` and two named volumes (`fastmcp-data`, `images-data`) persist state.
+
+## Single source of truth
+
+There is no longer a local `~/.claude/skills/bildsprache/` skill or an `install.sh` distribution path — this MCP server is the only way to reach Bildsprache. Brand visual presets live in `mcp_bildsprache/presets.py`; identity packs live on the `identity-data` volume; the AI-attribution contract is mirrored from `CaseyRo/CDiT-marketingskills/shared/` via `.github/workflows/shared-contract-check.yml`. When you change brand DNA, model routing, or sizing, edit it here and let CI ship — every client (Claude.ai, Claude Code, n8n) gets the change from the same server.
