@@ -160,7 +160,7 @@ Stdio mode skips auth entirely.
 
 ## Production deployment
 
-The server runs on the `ubuntu-smurf-mirror` host as a Docker compose stack, port `8007` → container `8000`, image hosted at `https://img.cdit-works.de`, MCP endpoint at `https://bildsprache.cdit-dev.de/mcp`. `FASTMCP_HOME=/data/fastmcp` and two named volumes (`fastmcp-data`, `images-data`) persist state.
+The server runs on the `nebula-1` host as a Docker compose stack `git-mcp-bildsprache-nebula` (container `git-mcp-bildsprache-nebula-mcp-bildsprache-1`), port `8007` → container `8000`. Static images hosted at `https://img.cdit-works.de`; MCP endpoint at `https://mcp-bildsprache.cdit-dev.de/mcp`. `FASTMCP_HOME=/data/fastmcp` and two named volumes (`fastmcp-data`, `images-data`) persist state. The stack uses `build: .` rather than pulling from ghcr — the release workflow still publishes images to `ghcr.io/caseyro/mcp-bildsprache` but production builds locally on each `deploy-stack`. This means the `/health` version string reflects whatever was in `pyproject.toml` at deploy time, which can lag the most recent CI release commit by one bump.
 
 ## Single source of truth
 
