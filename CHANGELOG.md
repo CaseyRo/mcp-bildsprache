@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.24] - 2026-05-08
+
+- chore(repo): correct deploy host docs + add dependabot auto-merge
+
+
 ## [0.3.22] - 2026-05-07
 
 - ops(docker): add log rotation (10m/3 files) to cap unbounded json-file logs
