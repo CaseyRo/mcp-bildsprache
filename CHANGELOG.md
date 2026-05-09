@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.27] - 2026-05-09
+
+- fix(openai): per-model size validation, edits-endpoint refs, no fallback
+
+
 ## [0.3.26] - 2026-05-09
 
 - feat(diagram): add generate_diagram tool + gallery Tailnet host
