@@ -39,21 +39,33 @@ from mcp_bildsprache.attribution import (
     get_contract_state,
     validate_shared_contract,
 )
-from mcp_bildsprache.types import IdentityPack, ProviderResult
+from mcp_bildsprache.types import (
+    IdentityPack,
+    ProviderResult,
+    ProviderTemporarilyDisabled,
+)
 
 logger = logging.getLogger(__name__)
 
 Model = Literal[
-    "gemini", "flux", "flux-2-max", "flux-2-pro",
-    "flux-kontext-pro", "flux-pro-1.1", "recraft",
-    "openai", "gpt-image-2", "gpt-image-1.5", "gpt-image-1-mini",
+    # Active providers (May 2026 brand collapse).
+    "gemini", "openai", "gpt-image-2", "gpt-image-1.5", "gpt-image-1-mini",
+    # Disabled but accepted at the API boundary so the dispatcher can
+    # raise ProviderTemporarilyDisabled with a clear migration message.
+    # Removing them from the Literal would surface as a cryptic Pydantic
+    # ValidationError instead.
+    "flux", "flux-2-max", "flux-2-pro", "flux-kontext-pro", "flux-pro-1.1",
+    "recraft",
 ]
+Register = Literal["personal", "professional"]
 BrandContext = Literal[
-    # Canonical bare-hyphenated slugs (CDI-1041 cross-skill alignment)
-    "casey-berlin", "cdit-works", "storykeep", "nah", "yorizon",
-    # Legacy variants — kept for backward-compat; normalised internally
-    # via mcp_bildsprache.brands.normalize_brand.
-    "@casey.berlin", "@cdit", "@cdit-works", "@storykeep", "@nah", "@yorizon",
+    # Active brands (May 2026 brand collapse).
+    "casey", "yorizon",
+    # Legacy variants — kept for backward-compat; either resolved to
+    # 'casey' by normalize_brand or surfaced with a migration message.
+    "casey-berlin", "cdit-works", "storykeep", "nah",
+    "@casey", "@casey.berlin", "@cdit", "@cdit-works",
+    "@storykeep", "@nah", "@yorizon",
 ]
 Platform = Literal[
     "linkedin-post",
@@ -70,30 +82,30 @@ Platform = Literal[
 
 PROVIDERS = {
     "gemini": generate_gemini,
+    "openai": generate_openai,
+    # FLUX (BFL) and Recraft modules remain in-tree so re-enabling is a
+    # one-PR dispatcher swap. The dispatcher does not route to them per
+    # the May 2026 brand-collapse change.
     "flux": generate_bfl,
     "recraft": generate_recraft,
-    "openai": generate_openai,
 }
 
+# Cross-provider fallback chain. Per the May 2026 brand-collapse change,
+# OpenAI is the active raster default; on outage it falls back to Gemini
+# (text-only — references are dropped). FLUX/Recraft are not dispatch
+# targets even on fallback.
 FALLBACKS = {
-    "flux": "gemini",
-    "gemini": "flux",
-    "recraft": "gemini",
-    # OpenAI falls back to FLUX when the OpenAI call fails, rather than
-    # jumping providers unpredictably. FLUX is our best general-purpose
-    # path and is always configured in production.
-    "openai": "flux",
+    "openai": "gemini",
+    "gemini": "openai",
 }
 
-# When references are present we must not fall back to a text-only path.
-# flux and gemini are reference-capable; recraft and openai are not and
-# should never be picked in this branch (and `route_model(has_references=True)`
-# prevents them from being auto-selected in the first place).
+# When references are present, OpenAI handles them natively via image[]=.
+# Gemini also supports multi-reference (Nano Banana Pro). FLUX/Recraft
+# are not dispatch-reachable. If OpenAI fails on a reference call, the
+# fallback to Gemini preserves multi-reference where possible.
 REFERENCE_FALLBACKS = {
-    "flux": "gemini",
-    "gemini": "flux",
-    "recraft": "flux",
-    "openai": "flux",
+    "openai": "gemini",
+    "gemini": "openai",
 }
 
 
@@ -237,6 +249,7 @@ async def _health_check_z(request: _SReq) -> _SResp:
 async def generate_image(
     prompt: str,
     context: BrandContext | None = None,
+    register: Register | None = None,
     model: Model | None = None,
     platform: Platform | None = None,
     dimensions: str | None = None,
@@ -252,34 +265,38 @@ async def generate_image(
     resized/cropped to exact dimensions, converted to WebP, and stored with
     AI provenance metadata.
 
+    Active providers (May 2026 brand collapse): OpenAI gpt-image-2 (default
+    raster) and Gemini Nano Banana (fallback). FLUX and Recraft are
+    temporarily disabled at the dispatcher; hinting at them raises
+    ``PROVIDER_TEMPORARILY_DISABLED``.
+
     Args:
         prompt: Description of the image to generate.
-        context: Brand context. Canonical bare slug:
-                 ``casey-berlin``, ``cdit-works``, ``storykeep``, ``nah``,
-                 ``yorizon``. Legacy variants ``@cdit``, ``@casey.berlin``,
-                 etc. are still accepted and normalised. If omitted, no
-                 brand preset is injected.
-        model: Force a specific model (gemini, flux, flux-2-pro, recraft,
-                openai, gpt-image-2, gpt-image-1-mini). Auto-routed if omitted.
-                NOTE: openai/gpt-image-* is NOT auto-selected — must be
-                explicitly requested via this parameter.
+        context: Brand context. Active brands: ``casey``, ``yorizon``.
+                 Legacy variants (``casey-berlin``, ``cdit-works``,
+                 ``@cdit``, ...) are normalised to ``casey``. If omitted,
+                 no brand preset is injected.
+        register: For ``context='casey'`` only. ``personal`` (recognition,
+                  manifesto-adjacent) or ``professional`` (verification,
+                  workshop voice). Defaults to ``professional`` for casey
+                  when omitted.
+        model: Force a specific model. Active hints: ``openai``,
+                ``gpt-image-2``, ``gpt-image-1-mini``, ``gemini``. Disabled
+                hints (``flux``, ``recraft``, ``flux-*``) raise
+                PROVIDER_TEMPORARILY_DISABLED with a migration message.
         platform: Target platform (linkedin-post, blog-hero, etc.) for auto-sizing.
         dimensions: Explicit dimensions as 'WxH' (e.g., '1200x1200'). Overrides platform sizing.
         mood: Emotional register for the image (e.g., 'contemplative', 'energetic').
         raw: If true, also store and return the unprocessed provider image (original format, no resize/WebP) as a separate URL.
         reference_images: Optional list of reference-image bytes. When provided,
             skips the identity pack resolver and forwards the caller's refs
-            directly to the provider. Rarely used — identity refs are usually
-            auto-resolved from ``context``.
-        include_dogs: Override the dog-slot heuristic for ``@casey.berlin``:
+            directly to the provider.
+        include_dogs: Override the dog-slot heuristic for ``casey``:
             None = use manifest rules (default), True = force-include dog
-            slots, False = suppress them. Ignored when ``context`` is not
-            ``@casey.berlin`` or no identity pack is loaded.
-        draft: If true, route to each provider's cheap tier:
-                openai → gpt-image-1-mini (~3.75x cheaper output),
-                flux → flux-pro-1.1 (falls back to legacy if flux-2 fails),
-                gemini → gemini-2.5-flash-image (flat-rate tier).
-                Trades quality for cost — good for iteration + gallery runs.
+            slots (Sien, Fimme), False = suppress them. Ignored when no
+            identity pack is loaded for the resolved context.
+        draft: If true, route OpenAI to ``gpt-image-1-mini`` (cheap tier).
+                Trades quality for cost.
     """
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
@@ -300,13 +317,26 @@ async def generate_image(
 
     has_refs = bool(refs_bytes)
 
-    # Determine provider (flux/gemini/recraft) and optional specific model ID
-    selected_provider = route_model(
-        context=context,
-        platform=platform,
-        model_hint=model,
-        has_references=has_refs,
-    )
+    # Determine provider. Per the May 2026 brand collapse, FLUX/Recraft
+    # hints raise ProviderTemporarilyDisabled; surface as a clean MCP
+    # error rather than a 500.
+    try:
+        selected_provider = route_model(
+            context=context,
+            platform=platform,
+            model_hint=model,
+            has_references=has_refs,
+            intent="raster",
+        )
+    except ProviderTemporarilyDisabled as e:
+        return {
+            "error": {
+                "code": "PROVIDER_TEMPORARILY_DISABLED",
+                "provider": e.provider,
+                "replacement": e.replacement,
+                "message": e.message,
+            },
+        }
     specific_model = model if model and model != selected_provider else None
 
     # Determine dimensions
@@ -322,14 +352,15 @@ async def generate_image(
         w, h = 1200, 1200
 
     # Build enhanced prompt with brand preset (+ composition clause when
-    # an identity pack resolved to a non-empty list for @casey.berlin)
+    # an identity pack resolved to a non-empty list for the casey brand).
     parts = []
     if context:
-        parts.append(get_preset(context))
-        # Casey composition clause fires for any casey-berlin variant
-        # (canonical or legacy @casey.berlin).
+        parts.append(get_preset(context, register=register))
+        # Casey composition clause fires when an identity pack contributed
+        # to refs and the resolved canonical brand is 'casey' (covers all
+        # legacy aliases via normalize_brand).
         from mcp_bildsprache.brands import normalize_brand as _normalize_brand
-        if used_identity_pack and _normalize_brand(context) == "casey-berlin":
+        if used_identity_pack and _normalize_brand(context) == "casey":
             parts.append(CASEY_COMPOSITION_CLAUSE)
     parts.append(prompt)
     if mood:
@@ -473,6 +504,7 @@ async def generate_image(
 async def generate_prompt(
     prompt: str,
     context: BrandContext | None = None,
+    register: Register | None = None,
     model: Model | None = None,
     platform: Platform | None = None,
     mood: str | None = None,
@@ -484,15 +516,29 @@ async def generate_prompt(
     Args:
         prompt: What the image should show.
         context: Brand context for preset injection.
-        model: Target model (affects prompt style).
+        register: For ``context='casey'`` only — ``personal`` or ``professional``.
+        model: Target model (affects prompt style). FLUX/Recraft hints raise
+                PROVIDER_TEMPORARILY_DISABLED.
         platform: Target platform (affects dimensions recommendation).
         mood: Emotional register.
     """
-    selected_model = route_model(context=context, platform=platform, model_hint=model)
+    try:
+        selected_model = route_model(
+            context=context, platform=platform, model_hint=model, intent="raster"
+        )
+    except ProviderTemporarilyDisabled as e:
+        return {
+            "error": {
+                "code": "PROVIDER_TEMPORARILY_DISABLED",
+                "provider": e.provider,
+                "replacement": e.replacement,
+                "message": e.message,
+            },
+        }
 
     parts = []
     if context:
-        parts.append(get_preset(context))
+        parts.append(get_preset(context, register=register))
     parts.append(prompt)
     if mood:
         parts.append(f"Mood/emotional register: {mood}")
@@ -504,48 +550,56 @@ async def generate_prompt(
         "model": selected_model,
         "dimensions": f"{dimensions[0]}x{dimensions[1]}",
         "brand_context": context,
+        "register": register,
         "platform": platform,
     }
 
 
 @mcp.tool
 async def list_models() -> dict:
-    """[image] List available image generation models and their capabilities.
+    """[image] List active image generation providers and their capabilities.
 
-    Returns a mapping with ``providers`` (list of available providers) and
-    ``identity_packs`` (brand → bool indicating whether an identity pack is
-    currently loaded for that brand).
+    Returns a mapping with ``providers`` (active providers reachable via the
+    dispatcher), ``disabled_providers`` (modules in-tree but not dispatched
+    per the May 2026 brand collapse), and ``identity_packs`` (brand → bool
+    indicating whether an identity pack is currently loaded).
     """
+    from mcp_bildsprache.presets import DISABLED_PROVIDERS
+
     available = []
+
+    if settings.openai_api_key.get_secret_value():
+        available.append({
+            "id": "openai",
+            "name": "OpenAI gpt-image-2",
+            "models": [
+                settings.openai_image_model,
+                settings.openai_image_model_draft,
+            ],
+            "default": settings.openai_image_model,
+            "best_for": (
+                "Default raster path. Strong typography in-image, "
+                "sibling-series consistency, reference image support."
+            ),
+            "cost": "$0.006–$0.211/image (quality-dependent)",
+            "rate_limit": "Tier 1: 5 IPM / 100K TPM (sequential dispatch)",
+            "status": "available",
+        })
 
     if settings.gemini_api_key.get_secret_value():
         available.append({
             "id": "gemini",
-            "name": "Gemini Image Generation",
-            "models": ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"],
-            "best_for": "Social media graphics, text-on-image, quick iterations",
-            "cost": "~$0.01/image",
-            "status": "available",
-        })
-
-    if settings.bfl_api_key.get_secret_value():
-        available.append({
-            "id": "flux",
-            "name": "FLUX (Black Forest Labs)",
-            "models": ["flux-2-max", "flux-2-pro", "flux-kontext-pro", "flux-pro-1.1"],
-            "default": "flux-2-max",
-            "best_for": "Editorial photography, hero images, cinematic quality, highest fidelity",
-            "cost": "$0.03–$0.07/image (model-dependent)",
-            "status": "available",
-        })
-
-    if settings.recraft_api_key.get_secret_value():
-        available.append({
-            "id": "recraft",
-            "name": "Recraft V4",
-            "models": ["recraftv4"],
-            "best_for": "Vectors, icons, illustrations, SVG-style output",
-            "cost": "$0.04/image",
+            "name": "Gemini Nano Banana",
+            "models": [
+                "gemini-3.1-flash-image-preview",
+                "gemini-2.5-flash-image",
+            ],
+            "best_for": (
+                "Diagram path (default for generate_diagram). Best in-image "
+                "text legibility, 'thinking' pre-render, native 4K. Also "
+                "the raster fallback when OpenAI is unavailable."
+            ),
+            "cost": "~$0.039/image (flat-rate flash tier)",
             "status": "available",
         })
 
@@ -554,26 +608,47 @@ async def list_models() -> dict:
 
     return {
         "providers": available,
+        "disabled_providers": list(DISABLED_PROVIDERS),
         "identity_packs": identity_packs,
+        "diagram_capable": ["openai", "gemini"],
+        "diagram_formats": ["flow", "sequence", "state"],
     }
 
 
 @mcp.tool
-async def get_visual_presets(context: BrandContext | None = None) -> dict:
+async def get_visual_presets(
+    context: BrandContext | None = None,
+    register: Register | None = None,
+) -> dict:
     """[image] Get visual style presets for image generation. For voice/writing rules, use klartext's get_brand_context instead.
+
+    Active brands (May 2026 brand collapse): ``casey`` (with personal/professional
+    registers), ``yorizon``. Legacy keys resolve to ``casey``.
 
     Args:
         context: Specific brand context to retrieve. If omitted, returns all presets.
+        register: For ``context='casey'`` only. ``personal`` or ``professional``.
+                  When provided, the response preset includes the matching
+                  register overlay.
     """
+    from mcp_bildsprache.presets import CASEY_REGISTER_OVERLAYS
+
     loaded = get_loaded_packs()
     if context:
         return {
             "context": context,
-            "preset": get_preset(context),
-            "identity_pack_loaded": context in loaded,
+            "register": register,
+            "preset": get_preset(context, register=register),
+            "identity_pack_loaded": (
+                context in loaded
+                or any(b in loaded for b in ("casey", "@casey", "@casey.berlin", "casey-berlin"))
+                if context in {"casey", "@casey", "casey-berlin", "@casey.berlin"}
+                else context in loaded
+            ),
         }
     return {
         "presets": PRESETS,
+        "casey_register_overlays": CASEY_REGISTER_OVERLAYS,
         "platforms": PLATFORM_SIZES,
         "identity_packs": {brand: True for brand in loaded},
     }

@@ -69,24 +69,35 @@ class TestLoadIdentityPacks:
         assert load_identity_packs(tmp_path / "nonexistent") == {}
 
     def test_valid_manifest_loads(self, tmp_path: Path):
-        _write_pack(tmp_path, "casey-berlin", _default_casey_manifest())
+        # Post-collapse canonical: directory named 'casey' → key '@casey'.
+        _write_pack(tmp_path, "casey", _default_casey_manifest())
         packs = load_identity_packs(tmp_path)
-        assert set(packs.keys()) == {"@casey.berlin"}
-        pack = packs["@casey.berlin"]
+        assert set(packs.keys()) == {"@casey"}
+        pack = packs["@casey"]
         assert isinstance(pack, IdentityPack)
         assert [s.name for s in pack.slots] == ["casey", "fimme", "sien"]
         assert pack.always_include == ("casey",)
 
+    def test_legacy_casey_berlin_directory_still_loads(self, tmp_path: Path):
+        # Pre-rename production state: directory still named 'casey-berlin'.
+        # The loader must still produce a usable pack so deploy ordering
+        # (rename volume after stack restart) doesn't break.
+        _write_pack(tmp_path, "casey-berlin", _default_casey_manifest())
+        packs = load_identity_packs(tmp_path)
+        # Pre-rename: the loader emits '@casey-berlin' (fall-through path
+        # since the new BRAND_PREFIXES no longer maps any key to the
+        # 'casey-berlin' directory name).
+        assert "@casey-berlin" in packs
+
     def test_missing_manifest_warns(self, tmp_path: Path, caplog):
-        # Directory exists but no manifest.json inside.
-        (tmp_path / "casey-berlin").mkdir()
+        (tmp_path / "casey").mkdir()
         with caplog.at_level(logging.WARNING, logger="mcp_bildsprache.identity"):
             packs = load_identity_packs(tmp_path)
         assert packs == {}
         assert any("identity_manifest_missing" in r.message for r in caplog.records)
 
     def test_malformed_manifest_warns(self, tmp_path: Path, caplog):
-        pack_dir = tmp_path / "casey-berlin"
+        pack_dir = tmp_path / "casey"
         pack_dir.mkdir()
         (pack_dir / "manifest.json").write_text("{not-json")
         with caplog.at_level(logging.WARNING, logger="mcp_bildsprache.identity"):
@@ -96,8 +107,7 @@ class TestLoadIdentityPacks:
 
     def test_missing_file_warns_and_marks_slot_unavailable(self, tmp_path: Path, caplog):
         manifest = _default_casey_manifest()
-        # Write pack but skip writing fimme-1.webp.
-        pack_dir = tmp_path / "casey-berlin"
+        pack_dir = tmp_path / "casey"
         pack_dir.mkdir()
         (pack_dir / "manifest.json").write_text(json.dumps(manifest))
         _write_tiny_webp(pack_dir / "casey-1.webp")
@@ -107,8 +117,8 @@ class TestLoadIdentityPacks:
         with caplog.at_level(logging.WARNING, logger="mcp_bildsprache.identity"):
             packs = load_identity_packs(tmp_path)
 
-        assert "@casey.berlin" in packs
-        pack = packs["@casey.berlin"]
+        assert "@casey" in packs
+        pack = packs["@casey"]
         fimme = next(s for s in pack.slots if s.name == "fimme")
         assert fimme.unavailable is True
         assert any("identity_file_missing" in r.message and "fimme-1.webp" in r.message
@@ -122,8 +132,8 @@ class TestLoadIdentityPacks:
 
 def _make_pack(tmp_path: Path) -> IdentityPack:
     """Build an IdentityPack with all slots available."""
-    _write_pack(tmp_path, "casey-berlin", _default_casey_manifest())
-    return load_identity_packs(tmp_path)["@casey.berlin"]
+    _write_pack(tmp_path, "casey", _default_casey_manifest())
+    return load_identity_packs(tmp_path)["@casey"]
 
 
 class TestResolveIdentity:
@@ -173,7 +183,7 @@ class TestResolveIdentity:
             IdentitySlot(name="sien", files=(tmp_path / "sien-1.webp",)),
         )
         pack = IdentityPack(
-            brand="@casey.berlin",
+            brand="@casey",
             slots=slots,
             always_include=("casey",),
             include_if_prompt_matches={

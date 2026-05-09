@@ -8,25 +8,27 @@ from slugify import slugify
 
 # Brand context → URL prefix mapping.
 #
-# Iteration order matters: identity._brand_context_for_dir returns the
-# FIRST matching entry's key as the pack-lookup name, so the legacy
-# dot-separated form must come before the canonical bare slug to keep
-# the loader emitting "@casey.berlin"-style keys (existing tests + any
-# downstream callers depend on it).
+# Active brands (May 2026 collapse): ``casey`` → ``casey/``, ``yorizon`` →
+# ``yorizon/``. Historical prefixes (``casey-berlin/``, ``cdit/``,
+# ``storykeep/``, ``nah/``) remain on the static mount so old URLs still
+# resolve, but new generations land under the active prefixes.
 #
-# Canonical bare slugs (CDI-1041) are added at the end so direct lookups
-# from `_resolve_brand_prefix` after normalize_brand still hit a value.
+# Iteration order matters: identity._brand_context_for_dir returns the
+# FIRST matching entry's key as the pack-lookup name. Active forms are
+# listed first so new lookups hit them; legacy forms remain for backward
+# compat on directory → context resolution.
 BRAND_PREFIXES = {
-    # Legacy / internal forms (preserve order — _brand_context_for_dir consumer)
-    "casey.berlin": "casey-berlin",
-    "cdit-works.de": "cdit",
-    "cdit": "cdit",
-    "storykeep": "storykeep",
-    "nah": "nah",
+    # Active brands.
+    "casey": "casey",
     "yorizon": "yorizon",
-    # Canonical bare slugs (CDI-1041) — for direct lookup post-normalize
-    "casey-berlin": "casey-berlin",
-    "cdit-works": "cdit",
+    # Legacy → active mappings (so old context strings still resolve).
+    "casey.berlin": "casey",
+    "casey-berlin": "casey",
+    "cdit-works.de": "casey",
+    "cdit-works": "casey",
+    "cdit": "casey",
+    "storykeep": "casey",
+    "nah": "casey",
 }
 
 MAX_SLUG_LENGTH = 60
