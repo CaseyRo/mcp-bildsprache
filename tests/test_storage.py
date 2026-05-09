@@ -11,12 +11,17 @@ from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
 
 
 class TestSlugGeneration:
-    def test_branded_slug(self):
+    def test_branded_slug_casey(self):
         prefix, filename = make_slug(
-            "morning walk through Kreuzberg", 1200, 630, brand_context="@casey.berlin"
+            "morning walk through Kreuzberg", 1200, 630, brand_context="casey"
         )
-        assert prefix == "casey-berlin"
+        assert prefix == "casey"
         assert filename == "morning-walk-through-kreuzberg-1200x630.webp"
+
+    def test_legacy_casey_berlin_resolves_to_casey_prefix(self):
+        # Post-collapse: legacy keys all map to 'casey/'.
+        prefix, _ = make_slug("test", 100, 100, brand_context="@casey.berlin")
+        assert prefix == "casey"
 
     def test_unbranded_slug(self):
         prefix, filename = make_slug("abstract pattern", 1080, 1080)
@@ -24,9 +29,9 @@ class TestSlugGeneration:
         assert "abstract-pattern" in filename
         assert "1080x1080" in filename
 
-    def test_cdit_context(self):
+    def test_legacy_cdit_resolves_to_casey_prefix(self):
         prefix, _ = make_slug("test", 100, 100, brand_context="@cdit")
-        assert prefix == "cdit"
+        assert prefix == "casey"
 
     def test_yorizon_context(self):
         prefix, _ = make_slug("test", 100, 100, brand_context="yorizon")
@@ -69,10 +74,11 @@ class TestStoreImage:
                 height=600,
                 model="test-model",
                 cost_estimate="$0.00",
-                brand_context="@casey.berlin",
+                brand_context="casey",
             )
 
-        assert url.startswith("https://img.cdit-works.de/casey-berlin/")
+        # New canonical: casey/ prefix.
+        assert url.startswith("https://img.cdit-works.de/casey/")
         assert url.endswith(".webp")
 
         # Check file exists
@@ -86,7 +92,7 @@ class TestStoreImage:
         sidecar = json.loads(json_files[0].read_text())
         assert sidecar["model"] == "test-model"
         assert sidecar["prompt"] == "test image"
-        assert sidecar["brand_context"] == "@casey.berlin"
+        assert sidecar["brand_context"] == "casey"
         assert sidecar["dimensions"] == "800x600"
 
     def test_collision_appends_hash(self, tmp_path: Path):
@@ -130,7 +136,8 @@ class TestStoreImage:
                 brand_context="@storykeep",
             )
 
-        assert (tmp_path / "storykeep").is_dir()
+        # storykeep collapsed into casey post-May-2026.
+        assert (tmp_path / "casey").is_dir()
 
     def test_first_write_fails_retry_succeeds(self, tmp_path: Path):
         """If first write_bytes raises OSError, retry should succeed."""

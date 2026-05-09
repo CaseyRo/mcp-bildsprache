@@ -18,32 +18,40 @@ should call ``normalize_brand`` before consulting their internal maps.
 
 from __future__ import annotations
 
+# Active brands (May 2026 brand collapse): ``casey`` and ``yorizon``.
+# Former ``casey-berlin`` and ``cdit-works`` merged into ``casey`` (with
+# personal/professional registers handled at the preset layer);
+# ``storykeep`` and ``nah`` removed.
 CANONICAL_BRANDS: tuple[str, ...] = (
-    "casey-berlin",
-    "cdit-works",
-    "storykeep",
-    "nah",
+    "casey",
     "yorizon",
 )
 
-# Maps every legacy/foreign slug variant we've seen to the canonical form.
-# Keep conservative — only forms we've actually observed in the wild.
+# Maps every legacy/foreign slug variant to the active brand. The collapsed
+# brands all funnel into ``casey``; ``yorizon`` keeps its identity.
 _ALIASES: dict[str, str] = {
-    # Bildsprache historical (@-prefixed, dot-separated, abbreviated)
-    "@casey.berlin": "casey-berlin",
-    "casey.berlin": "casey-berlin",
-    "@cdit": "cdit-works",
-    "cdit": "cdit-works",
-    "@cdit-works": "cdit-works",
-    "@cdit.works": "cdit-works",
-    "cdit-works.de": "cdit-works",
-    "cdit.works": "cdit-works",
-    "@storykeep": "storykeep",
-    "@nah": "nah",
+    # Casey-side legacy forms.
+    "@casey": "casey",
+    "@casey.berlin": "casey",
+    "casey.berlin": "casey",
+    "casey-berlin": "casey",
+    "casey_berlin": "casey",
+    # Former cdit-works (now the professional register on casey).
+    "@cdit": "casey",
+    "cdit": "casey",
+    "@cdit-works": "casey",
+    "@cdit.works": "casey",
+    "cdit-works": "casey",
+    "cdit-works.de": "casey",
+    "cdit.works": "casey",
+    "cdit_works": "casey",
+    # Removed brands (now under casey/professional by default).
+    "@storykeep": "casey",
+    "storykeep": "casey",
+    "@nah": "casey",
+    "nah": "casey",
+    # Yorizon stays separate.
     "@yorizon": "yorizon",
-    # Underscored variants
-    "casey_berlin": "casey-berlin",
-    "cdit_works": "cdit-works",
 }
 
 

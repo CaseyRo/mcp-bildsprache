@@ -12,23 +12,31 @@ from mcp_bildsprache.storage import StorageError
 from mcp_bildsprache.types import ProviderResult
 
 
-def _fake_provider_result() -> ProviderResult:
+def _fake_provider_result(model: str = "gpt-image-2") -> ProviderResult:
     buf = io.BytesIO()
     Image.new("RGB", (1024, 1024), color=(80, 120, 160)).save(buf, format="PNG")
     return ProviderResult(
         image_data=buf.getvalue(),
         mime_type="image/png",
-        model="flux-2-max",
-        cost_estimate="$0.07",
+        model=model,
+        cost_estimate="$0.05",
     )
 
 
 @pytest.fixture
 def mock_provider():
-    """Mock all providers to return a fake ProviderResult."""
+    """Mock all providers to return a fake ProviderResult.
+
+    Post-May-2026 collapse: openai + gemini are the active dispatch
+    targets. flux/recraft modules stay in-tree but unreachable; we still
+    mock them so any accidental dispatch doesn't hit the network.
+    """
     result = _fake_provider_result()
     mock = AsyncMock(return_value=result)
-    with patch("mcp_bildsprache.server.PROVIDERS", {"flux": mock, "gemini": mock, "recraft": mock}):
+    with patch(
+        "mcp_bildsprache.server.PROVIDERS",
+        {"openai": mock, "gemini": mock, "flux": mock, "recraft": mock},
+    ):
         yield mock
 
 
@@ -45,15 +53,18 @@ class TestGenerateImageHosting:
 
             result = await generate_image(
                 prompt="a beautiful sunset",
-                context="@casey.berlin",
+                context="casey",
+                register="personal",
                 platform="blog-hero",
             )
 
         assert "hosted_url" in result
-        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey-berlin/")
+        # Post-collapse: casey/ is the new prefix.
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
         assert result["hosted_url"].endswith(".webp")
         assert result["dimensions"] == "1600x900"
-        assert result["model"] == "flux-2-max"
+        # Default raster path is OpenAI gpt-image-2.
+        assert result["model"] == "gpt-image-2"
         assert "image_base64" not in result  # No raw data by default
 
         # Verify file was written
@@ -68,7 +79,7 @@ class TestGenerateImageHosting:
         json_files = list(tmp_path.rglob("*.json"))
         assert len(json_files) == 1
         sidecar = json.loads(json_files[0].read_text())
-        assert sidecar["brand_context"] == "@casey.berlin"
+        assert sidecar["brand_context"] == "casey"
 
     @pytest.mark.anyio
     async def test_always_returns_hosted_url(self, tmp_path: Path, mock_provider):
@@ -137,12 +148,13 @@ class TestRawMode:
 class TestProviderFallback:
     @pytest.mark.anyio
     async def test_primary_fails_fallback_succeeds(self, tmp_path: Path):
-        """When primary provider fails, fallback kicks in with intended_provider and fallback_reason."""
-        result_data = _fake_provider_result()
-        failing_mock = AsyncMock(side_effect=RuntimeError("Provider down"))
+        """When OpenAI fails, Gemini fallback kicks in (May 2026 collapse)."""
+        result_data = _fake_provider_result(model="gemini-3.1-flash-image-preview")
+        failing_mock = AsyncMock(side_effect=RuntimeError("OpenAI down"))
         success_mock = AsyncMock(return_value=result_data)
 
-        providers = {"flux": failing_mock, "gemini": success_mock, "recraft": success_mock}
+        # Active dispatch path: openai → gemini fallback.
+        providers = {"openai": failing_mock, "gemini": success_mock}
 
         with patch("mcp_bildsprache.server.PROVIDERS", providers), \
              patch("mcp_bildsprache.server.settings"), \
@@ -154,7 +166,7 @@ class TestProviderFallback:
             result = await generate_image(prompt="test fallback", dimensions="512x512")
 
         assert result["fallback_used"] is True
-        assert result["intended_provider"] == "flux"
+        assert result["intended_provider"] == "openai"
         assert result["fallback_reason"] == "provider_error"
         assert "hosted_url" in result
 
@@ -327,6 +339,8 @@ class TestIdentityIntegration:
     async def test_composition_clause_scoped_to_casey_only(
         self, tmp_path: Path, mock_provider
     ):
+        """Yorizon must never get the casey composition clause, even
+        when an identity pack happens to be loaded for casey."""
         from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
         from mcp_bildsprache.presets import CASEY_COMPOSITION_CLAUSE
         from mcp_bildsprache.server import generate_image
@@ -342,7 +356,7 @@ class TestIdentityIntegration:
 
             await generate_image(
                 prompt="morning walk",
-                context="@cdit",
+                context="yorizon",
                 dimensions="512x512",
             )
 
@@ -424,15 +438,18 @@ class TestOtherTools:
 
         result = await generate_prompt(
             prompt="a sunset over Berlin",
-            context="@casey.berlin",
+            context="casey",
+            register="personal",
             platform="blog-hero",
         )
 
         assert "engineered_prompt" in result
         assert "a sunset over Berlin" in result["engineered_prompt"]
-        assert result["model"] == "flux"
+        # Default raster path is OpenAI gpt-image-2.
+        assert result["model"] == "openai"
         assert result["dimensions"] == "1600x900"
-        assert result["brand_context"] == "@casey.berlin"
+        assert result["brand_context"] == "casey"
+        assert result["register"] == "personal"
 
     @pytest.mark.anyio
     async def test_list_models_returns_entries_when_keys_set(self):
@@ -440,20 +457,31 @@ class TestOtherTools:
 
         with patch("mcp_bildsprache.server.settings") as s:
             from pydantic import SecretStr
+            s.openai_api_key = SecretStr("fake-key")
             s.gemini_api_key = SecretStr("fake-key")
             s.bfl_api_key = SecretStr("fake-key")
             s.recraft_api_key = SecretStr("fake-key")
+            s.openai_image_model = "gpt-image-2"
+            s.openai_image_model_draft = "gpt-image-1-mini"
 
             result = await list_models()
 
         assert "providers" in result
         providers = result["providers"]
-        assert len(providers) == 3
+        # Active providers post-collapse: openai + gemini.
         ids = {m["id"] for m in providers}
-        assert ids == {"gemini", "flux", "recraft"}
+        assert ids == {"openai", "gemini"}
+
+        # Disabled providers reported separately.
+        assert "disabled_providers" in result
+        disabled_ids = {p["provider"] for p in result["disabled_providers"]}
+        assert disabled_ids == {"bfl", "recraft"}
 
         assert "identity_packs" in result
         assert isinstance(result["identity_packs"], dict)
+        # New: diagram-capable advertisement.
+        assert result["diagram_capable"] == ["openai", "gemini"]
+        assert set(result["diagram_formats"]) == {"flow", "sequence", "state"}
 
     @pytest.mark.anyio
     async def test_get_visual_presets_returns_presets(self):
@@ -462,13 +490,22 @@ class TestOtherTools:
         result = await get_visual_presets()
         assert "presets" in result
         assert "platforms" in result
-        assert "casey.berlin" in result["presets"]
+        # Active brand list post-collapse.
+        assert "casey" in result["presets"]
+        assert "yorizon" in result["presets"]
+        # Register overlays surfaced separately.
+        assert "casey_register_overlays" in result
+        assert set(result["casey_register_overlays"].keys()) == {
+            "personal",
+            "professional",
+        }
 
     @pytest.mark.anyio
     async def test_get_visual_presets_specific_context(self):
         from mcp_bildsprache.server import get_visual_presets
 
-        result = await get_visual_presets(context="@casey.berlin")
+        result = await get_visual_presets(context="casey", register="personal")
         assert "context" in result
         assert "preset" in result
-        assert "European editorial" in result["preset"]
+        assert "Register: personal" in result["preset"]
+        assert "paper bone" in result["preset"].lower() or "#F4EFE3" in result["preset"]

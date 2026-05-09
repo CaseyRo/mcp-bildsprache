@@ -6,6 +6,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+class ProviderTemporarilyDisabled(Exception):
+    """Raised when a caller hints at a provider that is intentionally not
+    dispatched in the current configuration.
+
+    Per the May 2026 brand-collapse change, FLUX (BFL) and Recraft are
+    disabled at the dispatcher layer but their modules remain in-tree so
+    re-enabling is a single-PR change. This error surfaces a clear
+    migration message naming the active replacement.
+    """
+
+    def __init__(self, provider: str, replacement: str, message: str | None = None):
+        self.provider = provider
+        self.replacement = replacement
+        self.message = message or (
+            f"{provider} is temporarily disabled. Active provider for this "
+            f"intent is {replacement}. Omit model_hint to use the default, or "
+            f"pass model_hint='{replacement}' explicitly."
+        )
+        super().__init__(self.message)
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderResult:
     """Unified return type from all image generation providers.
