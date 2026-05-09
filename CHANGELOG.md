@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.26] - 2026-05-09
+
+- feat(diagram): add generate_diagram tool + gallery Tailnet host
+
+
 ## [0.3.25] - 2026-05-09
 
 - feat(brand): casey + yorizon collapse, OpenAI-default raster, FLUX/Recraft disabled
