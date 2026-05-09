@@ -8,18 +8,19 @@ FastMCP server that exposes brand-aware image generation as MCP tools. It routes
 
 ### MCP tool surface
 
-`server.py` exposes four tools: `generate_image` (the full pipeline described below), `generate_prompt` (prompt engineering only, no provider call), `list_models` (capabilities/costs per provider), and `get_visual_presets` (returns the `PRESETS` dict, optionally filtered by `context`). When adding tools, keep the heavy lifting in helper modules — tool bodies should stay thin orchestrators.
+`server.py` exposes five tools: `generate_image` (the full raster pipeline described below), `generate_diagram` (Mermaid-aware flow/sequence/state diagrams via Gemini Nano Banana Pro by default), `generate_prompt` (prompt engineering only, no provider call), `list_models` (capabilities/costs per provider — splits active vs. disabled), and `get_visual_presets` (returns the `PRESETS` dict + `CASEY_REGISTER_OVERLAYS`, optionally filtered by `context` and `register`). When adding tools, keep the heavy lifting in helper modules — tool bodies should stay thin orchestrators.
 
 ### Module map
 
 - `server.py` — FastMCP app, tool definitions, orchestration, HTTP static mount.
-- `providers/` — one module per provider. Each exports an async `generate_*(prompt, width, height, ...)` returning `ProviderResult`. Dumb bytes-fetchers; no brand/sizing logic.
-- `presets.py` — `PRESETS`, `PLATFORM_SIZES`, `route_model`, `get_dimensions`, `get_preset`.
+- `providers/` — one module per provider. Each exports an async `generate_*(prompt, width, height, ...)` returning `ProviderResult`. Dumb bytes-fetchers; no brand/sizing logic. Per the May 2026 brand-collapse change, `providers/bfl.py` and `providers/recraft.py` remain in-tree but are not reachable via the dispatcher (`route_model` raises `ProviderTemporarilyDisabled` on FLUX/Recraft hints).
+- `presets.py` — `PRESETS` (active brands: `casey`, `yorizon`), `CASEY_PALETTE`, `CASEY_REGISTER_OVERLAYS`, `PLATFORM_SIZES`, `route_model` (intent="raster"|"diagram"), `get_dimensions`, `get_preset(context, register)`. `ACTIVE_PROVIDERS` and `DISABLED_PROVIDERS` are surfaced via `list_models`.
+- `diagrams.py` — `parse_mermaid` (flowchart/sequenceDiagram/stateDiagram only) and `compose_render_brief` (palette-injected, register-tilted prompt for the image model). Other Mermaid types raise `MermaidParseError`.
 - `pipeline.py` — `process_image` (resize/crop → WebP → EXIF).
 - `storage.py` — `store_image` / `store_raw_image`, slug collisions, JSON sidecars.
-- `slugs.py` — slug generation + `BRAND_PREFIXES` (URL-path dir per brand).
+- `slugs.py` — slug generation + `BRAND_PREFIXES` (URL-path dir per brand). New `casey/` prefix; legacy `casey-berlin/` and `cdit/` paths preserved on the static mount for historical URLs.
 - `config.py` — pydantic-settings env surface (API keys, `TRANSPORT`, Keycloak/API-key auth vars, data dir).
-- `types.py` — shared dataclasses, notably `ProviderResult(image_data, mime_type, model, cost_estimate)`.
+- `types.py` — shared dataclasses, notably `ProviderResult(image_data, mime_type, model, cost_estimate, usage?, revised_prompt?, model_version?)` and `ProviderTemporarilyDisabled` exception.
 - `auth.py` — `create_auth` returning the composed `MultiAuth` for HTTP mode.
 
 Package: `mcp_bildsprache` · Entry point: `mcp-bildsprache = mcp_bildsprache.server:main` · Python ≥3.11.
@@ -97,22 +98,44 @@ Key invariants:
 
 ### Brand presets
 
-`presets.py::PRESETS` is the source of truth for visual DNA per brand context (`@casey.berlin`, `@cdit`, `@storykeep`, `@nah`, `@yorizon`). These strings are prepended to every prompt for that context. `get_preset` falls back to `cdit-works.de` for unknown contexts.
+`presets.py::PRESETS` is the source of truth for visual DNA per brand context. Active brands (May 2026 brand collapse): `casey` (one voice, two registers — `personal` and `professional`) and `yorizon` (fully isolated, no shared palette tokens). Legacy keys (`casey-berlin`, `cdit-works`, `casey.berlin`, `@cdit`, `storykeep`, `nah`, ...) all normalise to `casey` via `mcp_bildsprache.brands.normalize_brand`.
 
-`slugs.py::BRAND_PREFIXES` maps the same contexts to URL-path directories (e.g. `casey.berlin → casey-berlin/`). Unknown context → `gen/`. Keep these two maps in sync when adding a brand.
+The `casey` preset injects the locked botanical palette from the 7 May 2026 brand-decisions doc: paper bone `#F4EFE3` (background, ~70% of surface), forest moss `#2C4A38` (primary form), pine ink `#1F2E26` (body text), weathered ochre `#B8884A` (accent ≤5%), soft moss `#C7CFB8` (hairlines). Vollkorn-style typography and anti-anchor exclusions (chrome, lens flare, neon, gradient mesh, generic AI aesthetic) are part of the base preset. Per-register overlays (`CASEY_REGISTER_OVERLAYS`) tilt prompt direction: personal = warmer / kitchen-table / lower contrast; professional = crisper / schematic / higher contrast.
 
-`PLATFORM_SIZES` is the auto-sizing table. Adding a platform requires updating the `Platform` `Literal` in `server.py` too (it's duplicated; the `Literal` constrains MCP tool schemas).
+`slugs.py::BRAND_PREFIXES` maps brand keys to URL-path directories. New generations land under `casey/`. Legacy `casey-berlin/` and `cdit/` directories stay populated and continue to serve historical URLs (no backfill).
+
+`PLATFORM_SIZES` is the auto-sizing table. Adding a platform requires updating the `Platform` `Literal` in `server.py` too.
+
+### Provider routing (May 2026 collapse)
+
+`presets.py::route_model(intent="raster"|"diagram", model_hint?, ...)`:
+
+- `intent="raster"` (default for `generate_image`): default → OpenAI gpt-image-2. Gemini Nano Banana is the cross-provider fallback.
+- `intent="diagram"` (used by `generate_diagram`): default → Gemini Nano Banana Pro. OpenAI gpt-image-2 available via `model_hint="openai"`.
+- `model_hint="flux"` / `"flux-*"` / `"recraft"` → raises `ProviderTemporarilyDisabled`. The replacement message names the active provider for the caller's intent (openai for raster, gemini for diagram).
+- `providers/bfl.py` and `providers/recraft.py` remain importable + tested for shape conformance, so re-enabling is a one-PR dispatcher swap. `BFL_API_KEY` and `RECRAFT_API_KEY` env vars are still recognised but unused.
+
+Tier 1 OpenAI rate-limit posture: existing `_post_with_backoff` (1s/4s/10s + jitter) absorbs 429s. Sequential dispatch — no parallel fan-out in v1. `event=image_generated` and `event=diagram_generated` log lines support cost aggregation via Komodo log queries.
+
+### Diagram tool (`generate_diagram`)
+
+`diagrams.py::parse_mermaid` covers `flowchart`/`graph`, `sequenceDiagram`, `stateDiagram`/`stateDiagram-v2`. Other graph types (`classDiagram`, `erDiagram`, `gantt`, `pie`, `gitGraph`, `mindmap`, `timeline`, `journey`, `quadrantChart`, `requirementDiagram`) raise `MermaidParseError` with a hint pointing at the supported set.
+
+`compose_render_brief(parsed, prompt, format, register)`: builds the engineered prompt sent to the image model. Always injects the botanical palette + Vollkorn typography + anti-caps rule. Format-specific UML conventions (lifelines/horizontal arrows/activation boxes for sequence; rounded boxes/filled circle/double-circle for state) are baked into the brief regardless of input shape (Mermaid or free-text).
+
+`generate_diagram` writes output to `/data/images/casey/` and the gallery indexes it like any other image. Default dimensions: `1600x900` for flow/state, `1200x1600` for sequence (taller for readability).
 
 ### Identity packs
 
-Brand presets handle *visual DNA* (palette, mood, composition). Identity packs handle *personal likeness* for brands where a specific person/subject appears on camera (`@casey.berlin`: Casey + his two Stabyhoun dogs, Fimme and Sien).
+Brand presets handle *visual DNA* (palette, mood, composition). Identity packs handle *personal likeness* for the casey brand (Casey + his two Stabyhoun dogs, Fimme and Sien).
 
 Identity packs live on the `identity-data` Docker volume, mounted **read-only** at `/data/identity/<brand-dir>/`. Each brand has its own `manifest.json` plus reference images. Nothing identity-related is committed to this repo — see `docs/identity/README.md` for the volume contract and `docs/identity/manifest.example.json` for the schema.
 
 - **Loader**: `mcp_bildsprache/identity.py::load_identity_packs` runs at server startup, caches packs in a module-level dict. Missing/malformed manifests → WARN once, server keeps running with text-only prompts.
 - **Resolver**: `resolve_identity_for_call(pack, prompt, include_dogs)` returns a deterministic list of reference-image paths (manifest declaration order). Person-excluding markers (`"icon"`, `"flat illustration"`, `"abstract pattern"`, `"logo"`, `"architectural detail"`, `"svg"`) short-circuit to `[]`.
-- **Composition clause**: `presets.py::CASEY_COMPOSITION_CLAUSE` is prepended to the enhanced prompt *only* when the identity pack resolves to a non-empty list for `@casey.berlin`. The gating lives in `server.py` so person-excluding prompts stay clean.
+- **Composition clause**: `presets.py::CASEY_COMPOSITION_CLAUSE` is prepended to the enhanced prompt *only* when the identity pack resolves to a non-empty list and the resolved canonical brand is `casey` (covers all legacy aliases). The gating lives in `server.py` so person-excluding prompts stay clean.
 - **`list_models`** returns `identity_packs: {brand: bool}`; `get_visual_presets(context=...)` returns `identity_pack_loaded: bool`.
+- **Volume rename in flight**: production may be on `/data/identity/casey-berlin/` (pre-rename) or `/data/identity/casey/` (post-rename). The loader handles both and `get_pack_for_context` tries multiple candidate keys (`casey`, `@casey`, `casey-berlin`, `@casey-berlin`, `@casey.berlin`) so deploy ordering can't break the lookup.
 - **Static mount hygiene**: `_mount_static_files` mounts `image_storage_path` only — `/data/identity` is never exposed via `img.cdit-works.de`. A regression test enforces this.
 
 ### Storage layout
@@ -144,7 +167,7 @@ In HTTP mode, `server.py::main()` calls `mcp.http_app(transport="http")` (FastMC
 
 The index lives in memory (`gallery/index.py::GalleryIndex`), built by walking JSON sidecars. It's rebuilt on Starlette startup (blocking), on a background timer (`GALLERY_REINDEX_INTERVAL_SECONDS`, default 300), and on demand via the reindex endpoint. There is no database and no file watcher.
 
-Auth is hostname-based: `gallery/middleware.py::TailnetOnlyMiddleware` rejects `/gallery/*` requests whose `Host` header doesn't match `GALLERY_TAILNET_HOSTNAME` with HTTP 404 (not 403 — don't advertise existence). When the env var is unset, the middleware is a no-op and logs one startup WARN. Other paths (`/mcp`, `/<brand>/*.webp`) are never gated.
+Auth is hostname-based: `gallery/middleware.py::TailnetOnlyMiddleware` rejects `/gallery/*` requests whose `Host` header doesn't match `GALLERY_TAILNET_HOSTNAME` with HTTP 404 (not 403 — don't advertise existence). Production hostname: `bildsprache.onca-blenny.ts.net` (set via the docktail `service.name=bildsprache` label in `compose.yaml` plus `GALLERY_TAILNET_HOSTNAME` env). When the env var is unset, the middleware is a no-op and logs one startup WARN. Other paths (`/mcp`, `/<brand>/*.webp`) are never gated. The container is exposed on the Tailnet by docktail (Tailscale serve via labels) — no separate `tailscale serve` config required.
 
 Bulk download is client-side: the frontend `fetch`es selected WebPs, feeds them to the vendored `fflate` (`gallery/static/fflate.min.js`, version pinned — see the neighboring `README.md` for SHA-256), and triggers a single Blob URL download. This is what makes it work on iOS Safari.
 

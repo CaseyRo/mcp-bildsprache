@@ -16,18 +16,43 @@ docker compose up --build
 ## MCP Tools
 
 - `generate_image` — Full image generation with brand preset injection.
-  Optional `reference_images: list[bytes]` forwards reference images to
-  providers that support them (Gemini, FLUX kontext-pro); usually
-  auto-resolved from the brand's identity pack when `context` is set.
-  Optional `include_dogs: bool | None` overrides the dog-slot heuristic
-  for `@casey.berlin` (True = force-include, False = suppress,
+  Default raster path: OpenAI gpt-image-2. Optional `register: 'personal' | 'professional'`
+  for the casey brand (May 2026 brand collapse). Optional `reference_images: list[bytes]`
+  forwards reference images to OpenAI gpt-image-2 (or auto-resolves from the brand's
+  identity pack when `context` is set). Optional `include_dogs: bool | None` overrides
+  the dog-slot heuristic for casey (True = force-include Sien + Fimme, False = suppress,
   None = use manifest rules).
-- `generate_prompt` — Prompt engineering only (no image generation)
-- `list_models` — Available models and their capabilities. Also reports
-  `identity_packs: {brand: bool}` so callers can see which brands have
-  an identity pack loaded.
-- `get_visual_presets` — Brand visual presets for each context. Per-brand
-  responses include `identity_pack_loaded: bool`.
+- `generate_diagram` — Flow / sequence / state diagrams via Gemini Nano Banana Pro
+  (default) or OpenAI gpt-image-2 (`model_hint='openai'`). Accepts free-text `prompt`
+  OR Mermaid `mermaid` source (parsed into a structured render brief). Brand palette
+  + UML conventions injected automatically. Format scope: `flow`, `sequence`, `state`.
+- `generate_prompt` — Prompt engineering only (no image generation).
+- `list_models` — Active providers (`openai`, `gemini`) plus a `disabled_providers`
+  array (`bfl`, `recraft` — modules in-tree but disabled at the dispatcher per the
+  May 2026 brand collapse). Also reports `identity_packs: {brand: bool}` and
+  `diagram_capable: [...]` / `diagram_formats: [...]`.
+- `get_visual_presets` — Brand visual presets for each context. Active brands:
+  `casey` (with `personal` and `professional` register overlays), `yorizon`. Per-brand
+  responses include `identity_pack_loaded: bool` and the matching register overlay
+  when `register` is supplied.
+
+## Brands and registers
+
+Active brands (May 2026 brand collapse): **casey**, **yorizon**.
+
+The `casey` brand carries one shared visual DNA across two registers:
+
+- `personal` — recognition surface, warmer kitchen-table mood, more bone, lower contrast.
+- `professional` — verification surface, crisper schematic clarity, more white space.
+
+Locked botanical palette: paper bone `#F4EFE3` (background, ~70%), forest moss
+`#2C4A38` (primary), pine ink `#1F2E26` (text), weathered ochre `#B8884A` (accent ≤5%),
+soft moss `#C7CFB8` (hairlines). Vollkorn-style typography. No all-caps anywhere.
+
+Legacy brand keys (`casey-berlin`, `cdit-works`, `casey.berlin`, `@cdit`,
+`storykeep`, `nah`) all normalise to `casey`. Yorizon is fully isolated (no shared
+palette tokens). FLUX and Recraft providers are temporarily disabled at the dispatcher;
+hinting at them returns `PROVIDER_TEMPORARILY_DISABLED` with a migration message.
 
 ## Identity packs
 
