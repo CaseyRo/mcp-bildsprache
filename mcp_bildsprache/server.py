@@ -500,6 +500,254 @@ async def generate_image(
     return result
 
 
+DiagramFormatLiteral = Literal["flow", "sequence", "state"]
+DiagramModelHint = Literal["openai", "gemini", "gpt-image-2", "nano-banana-pro"]
+
+
+@mcp.tool
+async def generate_diagram(
+    format: DiagramFormatLiteral,
+    prompt: str | None = None,
+    mermaid: str | None = None,
+    register: Register = "professional",
+    model_hint: DiagramModelHint | None = None,
+    dimensions: str | None = None,
+) -> dict:
+    """[image] Generate a brand-aware diagram (flow / sequence / state).
+
+    Default routing is Gemini Nano Banana Pro — best in-image text legibility,
+    pre-render "thinking" composition, native 4K output. OpenAI gpt-image-2
+    is available via ``model_hint='openai'`` (sibling-series consistency,
+    reference-image support). FLUX/Recraft hints raise
+    PROVIDER_TEMPORARILY_DISABLED.
+
+    Exactly one of ``prompt`` or ``mermaid`` must be provided.
+
+    Args:
+        format: Diagram type — ``flow`` (flowchart), ``sequence`` (UML
+                sequence diagram), or ``state`` (UML state diagram).
+                v1 supports these three; other Mermaid types
+                (classDiagram, erDiagram, gantt, pie, etc.) are rejected.
+        prompt: Free-text description of the diagram. Use this when you
+                want the model to compose structure from a natural-language
+                spec.
+        mermaid: Mermaid source. Parsed into a structured render brief —
+                 deterministic structure, brand-locked rendering. Mermaid
+                 source must start with ``flowchart``/``graph``/
+                 ``sequenceDiagram``/``stateDiagram`` (case-insensitive).
+        register: ``personal`` (warmer, hand-drawn quality, looser composition)
+                  or ``professional`` (crisper, schematic, restrained).
+                  Defaults to ``professional`` (the typical diagram use-case).
+        model_hint: Force a specific provider/model. ``gemini`` (default),
+                    ``openai``, ``gpt-image-2``, ``nano-banana-pro``. FLUX
+                    and Recraft are rejected.
+        dimensions: Explicit ``WxH`` (e.g. ``'1600x900'``). Defaults to
+                    ``1600x900`` for flow/state and ``1200x1600`` for sequence.
+
+    Returns:
+        Hosted URL plus ai_attribution, dimensions, model. Reuses the same
+        storage + sidecar + gallery pipeline as generate_image — diagrams
+        land under ``casey/`` for register=personal/professional.
+    """
+    from mcp_bildsprache.diagrams import (
+        MermaidParseError,
+        compose_render_brief,
+        parse_mermaid,
+    )
+
+    if not prompt and not mermaid:
+        return {
+            "error": {
+                "code": "INVALID_INPUT",
+                "message": "Provide exactly one of `prompt` or `mermaid`.",
+            },
+        }
+    if prompt and mermaid:
+        return {
+            "error": {
+                "code": "INVALID_INPUT",
+                "message": "Provide either `prompt` OR `mermaid`, not both.",
+            },
+        }
+
+    parsed = None
+    if mermaid:
+        try:
+            parsed = parse_mermaid(mermaid)
+        except MermaidParseError as e:
+            return {
+                "error": {
+                    "code": "MERMAID_PARSE_ERROR",
+                    "message": str(e),
+                    "line": e.line,
+                },
+            }
+        if parsed.format != format:
+            return {
+                "error": {
+                    "code": "MERMAID_FORMAT_MISMATCH",
+                    "message": (
+                        f"Mermaid header is {parsed.format!r} but format "
+                        f"argument is {format!r}. Pass format='{parsed.format}' "
+                        "or use a Mermaid source that matches."
+                    ),
+                },
+            }
+
+    # Route to provider (default gemini for diagrams).
+    try:
+        selected_provider = route_model(
+            model_hint=model_hint,
+            intent="diagram",
+        )
+    except ProviderTemporarilyDisabled as e:
+        return {
+            "error": {
+                "code": "PROVIDER_TEMPORARILY_DISABLED",
+                "provider": e.provider,
+                "replacement": e.replacement,
+                "message": e.message,
+            },
+        }
+    except ValueError as e:
+        return {
+            "error": {
+                "code": "INVALID_MODEL_HINT",
+                "message": str(e),
+            },
+        }
+
+    specific_model = (
+        model_hint if model_hint and model_hint != selected_provider else None
+    )
+
+    # Compose engineered prompt (palette + register + format conventions).
+    enhanced_prompt = compose_render_brief(
+        parsed=parsed,
+        prompt=prompt,
+        format=format,
+        register=register,
+    )
+
+    # Resolve dimensions. Sequence diagrams render better tall.
+    if dimensions:
+        try:
+            d_parts = dimensions.lower().replace(" ", "").split("x")
+            w, h = int(d_parts[0]), int(d_parts[1])
+        except (ValueError, IndexError):
+            return {
+                "error": {
+                    "code": "INVALID_DIMENSIONS",
+                    "message": (
+                        f"Invalid dimensions {dimensions!r}. Use 'WxH' "
+                        "(e.g. '1600x900')."
+                    ),
+                },
+            }
+    elif format == "sequence":
+        w, h = 1200, 1600
+    else:
+        w, h = 1600, 900
+
+    # Dispatch with fallback (openai ↔ gemini for diagrams).
+    fallback_used = False
+    original_provider = None
+
+    async def _call_provider(provider_key: str, model_id: str | None = None) -> ProviderResult:
+        provider_fn = PROVIDERS[provider_key]
+        kwargs: dict = {}
+        if provider_key == "openai":
+            if model_id and model_id.startswith("gpt-image"):
+                kwargs["model"] = model_id
+            return await provider_fn(enhanced_prompt, w, h, **kwargs)
+        return await provider_fn(enhanced_prompt, w, h, **kwargs)
+
+    try:
+        provider_result = await _call_provider(selected_provider, specific_model)
+    except Exception as e:
+        logger.warning(
+            "Diagram provider %s failed: %s — trying fallback",
+            selected_provider,
+            e,
+        )
+        fallback_provider = FALLBACKS.get(selected_provider)
+        if not fallback_provider:
+            raise
+        provider_result = await _call_provider(fallback_provider)
+        fallback_used = True
+        original_provider = selected_provider
+
+    # Diagrams always carry the casey brand context (yorizon-isolated per
+    # the diagram-generation spec). Build attribution accordingly.
+    attribution = build_attribution(
+        provider_result=provider_result,
+        prompt_anchor=(prompt or "(mermaid input)"),
+        effective_prompt=enhanced_prompt,
+        brand_context="casey",
+        params={
+            "platform": "diagram",
+            "format": format,
+            "register": register,
+            "dimensions": f"{w}x{h}",
+        },
+    )
+
+    result: dict = {
+        "model": provider_result.model,
+        "cost_estimate": format_legacy_cost_estimate(attribution),
+        "brand_context": "casey",
+        "register": register,
+        "format": format,
+        "dimensions": f"{w}x{h}",
+        "ai_attribution": attribution,
+    }
+    if fallback_used:
+        result["fallback_used"] = True
+        result["intended_provider"] = original_provider
+        result["fallback_reason"] = "provider_error"
+
+    processed_bytes = process_image(
+        provider_result=provider_result,
+        target_width=w,
+        target_height=h,
+        prompt=enhanced_prompt,
+        brand_context="casey",
+    )
+
+    hosted_url = store_image(
+        image_data=processed_bytes,
+        prompt=enhanced_prompt,
+        width=w,
+        height=h,
+        model=provider_result.model,
+        cost_estimate=provider_result.cost_estimate,
+        brand_context="casey",
+        fallback_used=fallback_used,
+        original_model=original_provider,
+        attribution=attribution,
+    )
+    result["hosted_url"] = hosted_url
+    result["response_mode"] = "url"
+
+    # Structured log for cost aggregation, mirrors generate_image.
+    cost_block = attribution.get("cost", {})
+    logger.info(
+        "event=diagram_generated "
+        "provider=%s model=%s format=%s register=%s amount_eur=%.6f "
+        "tier=%s schema_version=%s fallback=%s",
+        attribution.get("provider"),
+        provider_result.model,
+        format,
+        register,
+        float(cost_block.get("amount_eur") or 0.0),
+        cost_block.get("tier", "standard"),
+        attribution.get("schema_version"),
+        fallback_used,
+    )
+
+    return result
+
+
 @mcp.tool
 async def generate_prompt(
     prompt: str,

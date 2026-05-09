@@ -509,3 +509,235 @@ class TestOtherTools:
         assert "preset" in result
         assert "Register: personal" in result["preset"]
         assert "paper bone" in result["preset"].lower() or "#F4EFE3" in result["preset"]
+
+
+# ---------------------------------------------------------------------------
+# generate_diagram (May 2026 brand-collapse follow-up)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateDiagramTool:
+    @pytest.mark.anyio
+    async def test_freetext_flow_routes_to_gemini(
+        self, tmp_path: Path, mock_provider
+    ):
+        from mcp_bildsprache.server import generate_diagram
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_diagram(
+                format="flow",
+                prompt=(
+                    "User submits form -> validation -> API call -> "
+                    "response (success/error branches)"
+                ),
+            )
+
+        # No error key — successful response.
+        assert "error" not in result
+        assert result["format"] == "flow"
+        assert result["register"] == "professional"
+        assert result["brand_context"] == "casey"
+        assert "hosted_url" in result
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+
+    @pytest.mark.anyio
+    async def test_mermaid_flow_input(self, tmp_path: Path, mock_provider):
+        from mcp_bildsprache.server import generate_diagram
+
+        mermaid = """
+        flowchart TD
+            Start[User] --> Decision{Valid?}
+            Decision -->|yes| Done[Success]
+            Decision -->|no| Retry[Try again]
+        """
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_diagram(format="flow", mermaid=mermaid)
+
+        assert "error" not in result
+        assert "hosted_url" in result
+
+        # Verify the engineered prompt sent to the provider includes the
+        # parsed structure (palette + node names).
+        sent_prompt = mock_provider.await_args.args[0]
+        assert "User" in sent_prompt
+        assert "Success" in sent_prompt
+        assert "#F4EFE3" in sent_prompt  # palette token
+
+    @pytest.mark.anyio
+    async def test_mermaid_sequence_input(self, tmp_path: Path, mock_provider):
+        from mcp_bildsprache.server import generate_diagram
+
+        mermaid = """
+        sequenceDiagram
+            participant Browser
+            participant API
+            Browser->>API: GET /search
+            API-->>Browser: 200 OK
+        """
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_diagram(format="sequence", mermaid=mermaid)
+
+        assert "error" not in result
+        # Sequence default dimensions: portrait orientation.
+        assert result["dimensions"] == "1200x1600"
+
+    @pytest.mark.anyio
+    async def test_mermaid_state_input(self, tmp_path: Path, mock_provider):
+        from mcp_bildsprache.server import generate_diagram
+
+        mermaid = """
+        stateDiagram-v2
+            [*] --> Idle
+            Idle --> Active : start
+            Active --> Idle : pause
+            Active --> [*] : finish
+        """
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_diagram(format="state", mermaid=mermaid)
+
+        assert "error" not in result
+
+    @pytest.mark.anyio
+    async def test_openai_hint_routes_to_openai(
+        self, tmp_path: Path, mock_provider
+    ):
+        from mcp_bildsprache.server import generate_diagram
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_diagram(
+                format="flow",
+                prompt="A simple flow",
+                model_hint="openai",
+            )
+
+        assert "error" not in result
+        # mock_provider returns model='gpt-image-2' by default.
+        assert result["model"] == "gpt-image-2"
+
+    @pytest.mark.anyio
+    async def test_flux_hint_rejected(self):
+        from mcp_bildsprache.server import generate_diagram
+
+        result = await generate_diagram(
+            format="flow",
+            prompt="A flow",
+            model_hint="flux",
+        )
+
+        assert "error" in result
+        assert result["error"]["code"] == "PROVIDER_TEMPORARILY_DISABLED"
+        assert result["error"]["provider"] == "FLUX"
+        assert result["error"]["replacement"] == "gemini"  # diagram path replacement
+
+    @pytest.mark.anyio
+    async def test_no_input_rejected(self):
+        from mcp_bildsprache.server import generate_diagram
+
+        result = await generate_diagram(format="flow")
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_INPUT"
+
+    @pytest.mark.anyio
+    async def test_both_inputs_rejected(self):
+        from mcp_bildsprache.server import generate_diagram
+
+        result = await generate_diagram(
+            format="flow", prompt="text", mermaid="flowchart TD\n  A --> B"
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "INVALID_INPUT"
+
+    @pytest.mark.anyio
+    async def test_unsupported_mermaid_type_rejected(self):
+        from mcp_bildsprache.server import generate_diagram
+
+        result = await generate_diagram(
+            format="flow",
+            mermaid="erDiagram\n  CUSTOMER ||--o{ ORDER : places",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "MERMAID_PARSE_ERROR"
+        assert "ER diagrams" in result["error"]["message"]
+
+    @pytest.mark.anyio
+    async def test_format_mismatch_rejected(self):
+        from mcp_bildsprache.server import generate_diagram
+
+        # Mermaid says sequenceDiagram, format says flow.
+        result = await generate_diagram(
+            format="flow",
+            mermaid="sequenceDiagram\n  A->>B: hello",
+        )
+        assert "error" in result
+        assert result["error"]["code"] == "MERMAID_FORMAT_MISMATCH"
+
+    @pytest.mark.anyio
+    async def test_diagram_personal_register_default_overridable(
+        self, tmp_path: Path, mock_provider
+    ):
+        from mcp_bildsprache.server import generate_diagram
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_diagram(
+                format="flow",
+                prompt="A flow",
+                register="personal",
+            )
+
+        assert result["register"] == "personal"
+        sent_prompt = mock_provider.await_args.args[0]
+        # Personal register tilts toward warmer language.
+        assert "warmer" in sent_prompt.lower() or "kitchen-table" in sent_prompt.lower()
+
+    @pytest.mark.anyio
+    async def test_attribution_payload_present(
+        self, tmp_path: Path, mock_provider
+    ):
+        from mcp_bildsprache.server import generate_diagram
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_diagram(format="flow", prompt="test diagram")
+
+        assert "ai_attribution" in result
+        attr = result["ai_attribution"]
+        assert attr["schema_version"]
+        assert attr["provider"]
+        assert attr["model"]
