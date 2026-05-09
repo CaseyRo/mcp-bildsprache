@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.29] - 2026-05-09
+
+- fix(gallery): drive sub-app lifespan from parent so reindex actually fires
+
+
 ## [0.3.28] - 2026-05-09
 
 - docs(config): clarify disabled-but-recognised env vars (BFL/Recraft)
