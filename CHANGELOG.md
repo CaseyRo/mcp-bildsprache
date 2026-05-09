@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.25] - 2026-05-09
+
+- feat(brand): casey + yorizon collapse, OpenAI-default raster, FLUX/Recraft disabled
+
+
 ## [0.3.24] - 2026-05-08
 
 - chore(repo): correct deploy host docs + add dependabot auto-merge
