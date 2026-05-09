@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.28] - 2026-05-09
+
+- docs(config): clarify disabled-but-recognised env vars (BFL/Recraft)
+
+
 ## [0.3.27] - 2026-05-09
 
 - fix(openai): per-model size validation, edits-endpoint refs, no fallback
