@@ -932,10 +932,28 @@ def _mount_gallery(app) -> None:
     The TailnetOnlyMiddleware is installed on the parent app so that the
     Host-header check fires for every `/gallery/*` request regardless of
     which sub-app ends up handling it.
+
+    Lifespan wiring (2026-05-09 fix): FastMCP's ``http_app()`` provides
+    its own parent lifespan that does NOT delegate to mounted sub-apps,
+    so the gallery's ``create_gallery_app`` lifespan never fires by
+    default — meaning ``GalleryIndex.refresh()`` never runs at startup
+    and ``_reindex_loop`` never gets scheduled. The gallery responds to
+    requests but the index is empty until someone POSTs ``/api/reindex``
+    manually.
+
+    Fix: drive the gallery's startup/shutdown ourselves from this mount
+    helper. Initial scan runs synchronously (filesystem walk, no event
+    loop required); the periodic reindex task is started inside a
+    wrapper around the parent app's existing lifespan so it survives
+    FastMCP's ASGI shape.
     """
+    import asyncio
+    import contextlib
+    from contextlib import asynccontextmanager
     from pathlib import Path
 
     from mcp_bildsprache.gallery.app import create_gallery_app
+    from mcp_bildsprache.gallery.index import _reindex_loop
     from mcp_bildsprache.gallery.middleware import TailnetOnlyMiddleware
 
     if not settings.gallery_enabled:
@@ -951,12 +969,47 @@ def _mount_gallery(app) -> None:
         reindex_interval_seconds=settings.gallery_reindex_interval_seconds,
     )
 
+    # Initial scan: synchronous filesystem walk, runs before uvicorn binds.
+    # This guarantees /gallery/api/images returns populated data on the
+    # very first request, regardless of how the parent lifespan behaves.
+    index = gallery_app.state.gallery_index
+    initial_count = index.refresh()
+    logger.info(
+        "Gallery initial scan: %d entries from %s",
+        initial_count,
+        data_dir,
+    )
+
     # Mount BEFORE the `/` static mount runs so the `/gallery` prefix wins.
     app.router.routes.insert(0, _build_gallery_mount(gallery_app))
     app.add_middleware(
         TailnetOnlyMiddleware,
         allowed_host=settings.gallery_tailnet_hostname,
     )
+
+    # Wrap the parent's lifespan so the periodic reindex task starts and
+    # stops with the parent's ASGI lifespan. Doing this AFTER mounting
+    # ensures we wrap whatever FastMCP put in place.
+    interval_s = max(1, int(settings.gallery_reindex_interval_seconds))
+    parent_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def _wrapped_lifespan(scope_app):
+        async with parent_lifespan(scope_app):
+            task = asyncio.create_task(_reindex_loop(index, interval_s))
+            logger.info(
+                "Gallery periodic reindex started (interval %ds)",
+                interval_s,
+            )
+            try:
+                yield
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    app.router.lifespan_context = _wrapped_lifespan
+
     logger.info(
         "Gallery mounted at /gallery (tailnet hostname: %s)",
         settings.gallery_tailnet_hostname or "<unset>",
