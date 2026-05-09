@@ -90,22 +90,28 @@ PROVIDERS = {
     "recraft": generate_recraft,
 }
 
-# Cross-provider fallback chain. Per the May 2026 brand-collapse change,
-# OpenAI is the active raster default; on outage it falls back to Gemini
-# (text-only — references are dropped). FLUX/Recraft are not dispatch
-# targets even on fallback.
-FALLBACKS = {
-    "openai": "gemini",
-    "gemini": "openai",
+# Cross-provider fallback chain. Per the May 2026 brand-collapse follow-up
+# (2026-05-09), the openai → gemini fallback for raster generation has
+# been REMOVED at the user's explicit direction: "It MUST work, no
+# fallback! fix before continuing testing." The previous fallback masked
+# real OpenAI bugs (e.g. wrong size constraints for gpt-image-1-mini)
+# behind silent Gemini handoffs, so callers got Gemini-quality output
+# while thinking they had gpt-image-2.
+#
+# The only fallback that remains is for the diagram path: if Gemini
+# fails on generate_diagram, we let the call fail rather than swap to
+# OpenAI silently — the caller can opt into OpenAI explicitly via
+# model_hint="openai" when sibling-series consistency matters.
+FALLBACKS: dict[str, str | None] = {
+    "openai": None,
+    "gemini": None,
 }
 
-# When references are present, OpenAI handles them natively via image[]=.
-# Gemini also supports multi-reference (Nano Banana Pro). FLUX/Recraft
-# are not dispatch-reachable. If OpenAI fails on a reference call, the
-# fallback to Gemini preserves multi-reference where possible.
-REFERENCE_FALLBACKS = {
-    "openai": "gemini",
-    "gemini": "openai",
+# REFERENCE_FALLBACKS kept for callers (tests) that import it; same
+# no-fallback policy applies.
+REFERENCE_FALLBACKS: dict[str, str | None] = {
+    "openai": None,
+    "gemini": None,
 }
 
 

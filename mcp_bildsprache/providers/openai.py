@@ -42,6 +42,7 @@ from mcp_bildsprache.types import ProviderResult
 logger = logging.getLogger(__name__)
 
 OPENAI_IMAGES_URL = "https://api.openai.com/v1/images/generations"
+OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits"
 
 # OpenAI size constraints for gpt-image-2 (from the docs as of 2026-04-24):
 #   - max edge <= 3840 px
@@ -67,15 +68,61 @@ class OpenAIRateLimited(RuntimeError):
     """Raised after exponential-backoff budget is exhausted on 429."""
 
 
-def _validate_and_snap_size(width: int, height: int) -> tuple[int, int]:
-    """Return the nearest OpenAI-compliant size for a caller-requested WxH.
+# gpt-image-1-mini accepts only this fixed set (verified empirically against
+# the OpenAI Images API on 2026-05-09 — see CHANGELOG / brand-collapse smoke).
+# Anything else returns 400 invalid_value. The post-processing pipeline crops
+# the response to the caller's exact target dims, so we just pick the closest
+# legal size whose aspect ratio matches the request.
+_MINI_SIZES: tuple[tuple[int, int], ...] = (
+    (1024, 1024),  # square
+    (1024, 1536),  # portrait (2:3)
+    (1536, 1024),  # landscape (3:2)
+)
 
-    Raises OpenAISizeError if the input is fundamentally out of bounds
-    (ratio >3:1 or pixels outside the supported range).
+
+def _snap_size_for_mini(width: int, height: int) -> tuple[int, int]:
+    """Snap to the closest gpt-image-1-mini legal size matching the aspect.
+
+    Picks by aspect-ratio similarity. The post-processing pipeline trims
+    the provider response to the caller's exact requested dimensions, so
+    the only constraint here is "send a size the API accepts."
     """
     if width <= 0 or height <= 0:
         raise OpenAISizeError(f"invalid dimensions {width}x{height}")
 
+    target_ratio = width / height
+
+    # Rank candidates by absolute log-ratio distance (handles portrait
+    # vs landscape symmetrically).
+    def _distance(c: tuple[int, int]) -> float:
+        cw, ch = c
+        return abs(math.log(target_ratio) - math.log(cw / ch))
+
+    return min(_MINI_SIZES, key=_distance)
+
+
+def _validate_and_snap_size(
+    width: int, height: int, model: str = "gpt-image-2"
+) -> tuple[int, int]:
+    """Return the nearest OpenAI-compliant size for a caller-requested WxH.
+
+    Branches per model:
+    - ``gpt-image-1-mini``: snap to one of the three fixed sizes the model
+      accepts. Aspect-ratio match wins.
+    - ``gpt-image-2`` (and any other gpt-image-2.* dated snapshot): apply
+      the looser constraints (≤3840 max edge, multiple of 16, total pixels
+      in [655K, 8.3M], aspect ≤3:1).
+
+    Raises OpenAISizeError if the input is fundamentally out of bounds
+    (ratio >3:1 or pixels outside the supported range — gpt-image-2 path).
+    """
+    if width <= 0 or height <= 0:
+        raise OpenAISizeError(f"invalid dimensions {width}x{height}")
+
+    if model.startswith("gpt-image-1-mini"):
+        return _snap_size_for_mini(width, height)
+
+    # Default: gpt-image-2 family constraints.
     ratio = max(width, height) / min(width, height)
     if ratio > _MAX_RATIO:
         raise OpenAISizeError(
@@ -184,12 +231,6 @@ async def generate_openai(
     if quality not in _QUALITIES:
         raise ValueError(f"openai: unsupported quality '{quality}' (allowed: {_QUALITIES})")
 
-    if reference_images:
-        logger.info(
-            "openai: dropping %d reference image(s) — edit endpoint not wired in v1",
-            len(reference_images),
-        )
-
     # Strip params gpt-image-2 rejects.
     _strip_unsupported_kwargs(kwargs)
 
@@ -199,30 +240,67 @@ async def generate_openai(
         settings.openai_image_model_draft if draft else settings.openai_image_model,
     )
 
-    snapped_w, snapped_h = _validate_and_snap_size(width, height)
+    snapped_w, snapped_h = _validate_and_snap_size(width, height, model=model)
     size = f"{snapped_w}x{snapped_h}"
 
-    payload: dict[str, Any] = {
-        "model": model,
-        "prompt": prompt,
-        "size": size,
-        "quality": quality,
-        "n": 1,
-        "output_format": output_format,
-        "background": background,
-        "moderation": moderation,
-    }
-    # output_compression only valid for jpeg/webp
-    if output_format in ("jpeg", "webp"):
-        payload["output_compression"] = int(output_compression)
-
-    headers = {
+    headers_json = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    headers_multipart = {
+        "Authorization": f"Bearer {api_key}",
+        # Don't set Content-Type — httpx sets the multipart boundary.
+    }
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await _post_with_backoff(client, payload, headers)
+        if reference_images:
+            # Reference-bearing path: POST /v1/images/edits with multipart
+            # `image[]` uploads. Per the brief's hero shots (which used
+            # `image[]=sien.jpg`), the edits endpoint is the canonical way
+            # to generate identity-aware images on gpt-image-2.
+            logger.info(
+                "openai: routing to /images/edits with %d reference image(s)",
+                len(reference_images),
+            )
+            data_form: list[tuple[str, Any]] = [
+                ("model", (None, model)),
+                ("prompt", (None, prompt)),
+                ("size", (None, size)),
+                ("quality", (None, quality)),
+                ("n", (None, "1")),
+                ("output_format", (None, output_format)),
+                ("background", (None, background)),
+            ]
+            if output_format in ("jpeg", "webp"):
+                data_form.append(
+                    ("output_compression", (None, str(int(output_compression))))
+                )
+            files: list[tuple[str, tuple[str, bytes, str]]] = []
+            for idx, ref_bytes in enumerate(reference_images):
+                files.append(
+                    (
+                        "image[]",
+                        (f"reference_{idx}.png", ref_bytes, "image/png"),
+                    )
+                )
+            response = await _post_multipart_with_backoff(
+                client, OPENAI_EDITS_URL, data_form + files, headers_multipart
+            )
+        else:
+            payload: dict[str, Any] = {
+                "model": model,
+                "prompt": prompt,
+                "size": size,
+                "quality": quality,
+                "n": 1,
+                "output_format": output_format,
+                "background": background,
+                "moderation": moderation,
+            }
+            # output_compression only valid for jpeg/webp
+            if output_format in ("jpeg", "webp"):
+                payload["output_compression"] = int(output_compression)
+            response = await _post_with_backoff(client, payload, headers_json)
 
     data = response.json()
     if not data.get("data"):
@@ -263,18 +341,22 @@ async def generate_openai(
 async def _post_with_backoff(
     client: httpx.AsyncClient, payload: dict[str, Any], headers: dict[str, str]
 ) -> httpx.Response:
-    """POST with exponential backoff on 429. Budget: 3 retries, ~30s total."""
-    delays = (1.0, 4.0, 10.0)  # backoff schedule; max_total ~= 15s with jitter
+    """POST JSON to /images/generations with exponential backoff on 429.
+
+    Budget: 3 retries, ~30s total. On a non-429 4xx/5xx, raises with the
+    response body included so the caller can see what OpenAI complained
+    about (otherwise the default raise_for_status() strips the body).
+    """
+    delays = (1.0, 4.0, 10.0)
     for attempt, delay in enumerate(delays + (None,)):  # type: ignore[operator]
         response = await client.post(OPENAI_IMAGES_URL, json=payload, headers=headers)
         if response.status_code != 429:
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             return response
         if delay is None:
             raise OpenAIRateLimited(
                 "openai: 429 after retry budget exhausted (3 retries, ~15s)"
             )
-        # Jitter: +/- 25% so parallel clients don't all retry in sync.
         jittered = delay * (0.75 + 0.5 * random.random())
         logger.warning(
             "openai: 429 on attempt %d — sleeping %.1fs before retry",
@@ -282,8 +364,55 @@ async def _post_with_backoff(
             jittered,
         )
         await asyncio.sleep(jittered)
-    # Unreachable but keeps type checkers happy.
     raise OpenAIRateLimited("openai: unreachable backoff exit")
+
+
+async def _post_multipart_with_backoff(
+    client: httpx.AsyncClient,
+    url: str,
+    files: list[tuple[str, Any]],
+    headers: dict[str, str],
+) -> httpx.Response:
+    """POST multipart to /images/edits with exponential backoff on 429.
+
+    The `files` list mixes form fields (tuple value `(None, value)`) and
+    file uploads (tuple value `(filename, bytes, mime)`); httpx accepts
+    both shapes in the `files=` kwarg.
+    """
+    delays = (1.0, 4.0, 10.0)
+    for attempt, delay in enumerate(delays + (None,)):  # type: ignore[operator]
+        response = await client.post(url, files=files, headers=headers)
+        if response.status_code != 429:
+            _raise_for_status_with_body(response)
+            return response
+        if delay is None:
+            raise OpenAIRateLimited(
+                "openai: 429 after retry budget exhausted (edits endpoint)"
+            )
+        jittered = delay * (0.75 + 0.5 * random.random())
+        logger.warning(
+            "openai (edits): 429 on attempt %d — sleeping %.1fs before retry",
+            attempt + 1,
+            jittered,
+        )
+        await asyncio.sleep(jittered)
+    raise OpenAIRateLimited("openai: unreachable backoff exit (edits)")
+
+
+def _raise_for_status_with_body(response: httpx.Response) -> None:
+    """Raise HTTPStatusError on 4xx/5xx, including the response body in the
+    message so log readers can see *why* OpenAI rejected the call.
+    """
+    if response.is_success:
+        return
+    body_snippet = response.text[:600] if response.text else "(empty body)"
+    logger.warning(
+        "openai: HTTP %d for %s — body: %s",
+        response.status_code,
+        response.url,
+        body_snippet,
+    )
+    response.raise_for_status()
 
 
 def _legacy_cost_string(model: str, usage: dict[str, Any]) -> str:

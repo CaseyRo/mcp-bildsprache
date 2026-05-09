@@ -222,16 +222,51 @@ class TestRateLimitBackoff:
 
 
 class TestReferenceImages:
-    async def test_reference_images_dropped_silently(
+    async def test_reference_images_route_to_edits_endpoint(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
+        """Per the May 2026 brand-collapse follow-up (2026-05-09), refs
+        route to /v1/images/edits with multipart `image[]=` uploads
+        rather than being dropped. This is what the brief's hero shots
+        used (`image[]=sien.jpg`)."""
+        httpx_mock.add_response(
+            url="https://api.openai.com/v1/images/edits",
+            json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}),
+        )
         import logging
 
         with caplog.at_level(logging.INFO):
-            r = await generate_openai("prompt", reference_images=[b"ref1", b"ref2"])
+            r = await generate_openai(
+                "prompt", reference_images=[b"ref1", b"ref2"]
+            )
         assert r.model == "gpt-image-2"
-        assert any("dropping 2 reference" in rec.message for rec in caplog.records)
+        # Routing log surfaces the count + endpoint.
+        assert any(
+            "/images/edits" in rec.message and "2 reference" in rec.message
+            for rec in caplog.records
+        )
+
+        # The request must have been multipart with two image[] uploads.
+        request = httpx_mock.get_request()
+        assert request is not None
+        body = request.read()
+        assert b'name="image[]"' in body
+        # Two file parts.
+        assert body.count(b'name="image[]"') == 2
+
+    async def test_no_reference_images_uses_generations_endpoint(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(
+            url="https://api.openai.com/v1/images/generations",
+            json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}),
+        )
+        await generate_openai("plain prompt, no refs")
+        # If the request hit /generations, the mock satisfied; if not,
+        # httpx_mock raises in fixture teardown.
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert "/images/generations" in str(request.url)
 
 
 class TestSizeInRequest:
@@ -266,3 +301,81 @@ class TestOutputCompression:
         await generate_openai("prompt", output_format="png", output_compression=50)
         body = _json.loads(httpx_mock.get_request().read())
         assert "output_compression" not in body
+
+
+# ---------------------------------------------------------------------------
+# gpt-image-1-mini size validation (added 2026-05-09 after the brand-collapse
+# smoke surfaced "Invalid size '1200x1200'" because the mini model only
+# accepts a fixed three-size set, not the looser gpt-image-2 constraints).
+# ---------------------------------------------------------------------------
+
+
+class TestMiniSizeSnapping:
+    def test_square_request_snaps_to_1024x1024(self):
+        assert _validate_and_snap_size(1200, 1200, model="gpt-image-1-mini") == (
+            1024,
+            1024,
+        )
+
+    def test_landscape_linkedin_snaps_to_1536x1024(self):
+        # 1200x630 (LinkedIn article) is landscape ~1.9:1 → closest mini
+        # size is 1536x1024 (1.5:1).
+        assert _validate_and_snap_size(1200, 630, model="gpt-image-1-mini") == (
+            1536,
+            1024,
+        )
+
+    def test_portrait_story_snaps_to_1024x1536(self):
+        # 1080x1920 (instagram-story) is portrait ~0.56 → 1024x1536 (0.67) is
+        # the closest mini size.
+        assert _validate_and_snap_size(1080, 1920, model="gpt-image-1-mini") == (
+            1024,
+            1536,
+        )
+
+    def test_oversized_square_still_snaps_square(self):
+        assert _validate_and_snap_size(2480, 3508, model="gpt-image-1-mini") == (
+            1024,
+            1536,
+        )
+
+    def test_invalid_dims_raise(self):
+        from mcp_bildsprache.providers.openai import OpenAISizeError
+        with pytest.raises(OpenAISizeError):
+            _validate_and_snap_size(0, 100, model="gpt-image-1-mini")
+
+    def test_default_model_keeps_legacy_constraints(self):
+        # Without model arg, defaults to gpt-image-2 constraints.
+        assert _validate_and_snap_size(1200, 1200) == (1200, 1200)
+
+    def test_explicit_gpt_image_2_keeps_legacy_constraints(self):
+        assert _validate_and_snap_size(1200, 1200, model="gpt-image-2") == (
+            1200,
+            1200,
+        )
+
+    def test_gpt_image_2_dated_snapshot_uses_legacy(self):
+        # Dated snapshot like gpt-image-2-2026-04-21 should use the gpt-image-2
+        # constraint set, not the mini set.
+        assert _validate_and_snap_size(
+            1200, 1200, model="gpt-image-2-2026-04-21"
+        ) == (1200, 1200)
+
+
+class TestMiniSizeInRequest:
+    async def test_mini_payload_includes_legal_size(self, httpx_mock: HTTPXMock) -> None:
+        from mcp_bildsprache.config import settings
+
+        httpx_mock.add_response(
+            url="https://api.openai.com/v1/images/generations",
+            json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}),
+        )
+        # draft=True routes to the mini model.
+        await generate_openai("prompt", width=1200, height=1200, draft=True)
+        request = httpx_mock.get_request()
+        assert request is not None
+        import json
+        payload = json.loads(request.read().decode())
+        assert payload["model"] == settings.openai_image_model_draft
+        # Must be one of the legal mini sizes — not 1200x1200 (which OpenAI rejects).
+        assert payload["size"] in ("1024x1024", "1024x1536", "1536x1024")

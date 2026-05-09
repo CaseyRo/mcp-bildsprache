@@ -145,15 +145,18 @@ class TestRawMode:
         assert "raw_url" not in result
 
 
-class TestProviderFallback:
+class TestNoFallback:
     @pytest.mark.anyio
-    async def test_primary_fails_fallback_succeeds(self, tmp_path: Path):
-        """When OpenAI fails, Gemini fallback kicks in (May 2026 collapse)."""
-        result_data = _fake_provider_result(model="gemini-3.1-flash-image-preview")
-        failing_mock = AsyncMock(side_effect=RuntimeError("OpenAI down"))
-        success_mock = AsyncMock(return_value=result_data)
+    async def test_openai_failure_propagates_no_silent_swap(self, tmp_path: Path):
+        """User directive 2026-05-09: 'It MUST work, no fallback!'
 
-        # Active dispatch path: openai → gemini fallback.
+        When OpenAI fails, the error must propagate to the caller — we no
+        longer silently swap to Gemini, which masked real OpenAI bugs
+        (e.g. wrong size constraints for gpt-image-1-mini).
+        """
+        failing_mock = AsyncMock(side_effect=RuntimeError("OpenAI down"))
+        success_mock = AsyncMock(return_value=_fake_provider_result())
+
         providers = {"openai": failing_mock, "gemini": success_mock}
 
         with patch("mcp_bildsprache.server.PROVIDERS", providers), \
@@ -163,12 +166,11 @@ class TestProviderFallback:
             ss.image_domain = "https://img.cdit-works.de"
 
             from mcp_bildsprache.server import generate_image
-            result = await generate_image(prompt="test fallback", dimensions="512x512")
+            with pytest.raises(RuntimeError, match="OpenAI down"):
+                await generate_image(prompt="test no fallback", dimensions="512x512")
 
-        assert result["fallback_used"] is True
-        assert result["intended_provider"] == "openai"
-        assert result["fallback_reason"] == "provider_error"
-        assert "hosted_url" in result
+        # Gemini must NOT have been called — no silent swap.
+        success_mock.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_storage_error_propagates(self, tmp_path: Path, mock_provider):
