@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.30] - 2026-05-09
+
+- fix: expose docktail service on HTTPS/443 for bildsprache gallery
+
+
 ## [0.3.29] - 2026-05-09
 
 - fix(gallery): drive sub-app lifespan from parent so reindex actually fires
