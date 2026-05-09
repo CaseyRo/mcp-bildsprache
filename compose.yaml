@@ -14,6 +14,8 @@ services:
       docktail.service.name: "bildsprache"
       docktail.service.port: "8000"
       docktail.service.network: "git-mcp-bildsprache-nebula_default"
+      docktail.service.service-protocol: "https"
+      docktail.service.service-port: "443"
     environment:
       - TRANSPORT=http
       - HOST=0.0.0.0
