@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.31] - 2026-05-11
+
+- fix(gallery): 0×0 dimensions, missing platform, broken view toggle
+
+
 ## [0.3.30] - 2026-05-09
 
 - fix: expose docktail service on HTTPS/443 for bildsprache gallery
