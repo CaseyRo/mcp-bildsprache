@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.32] - 2026-05-11
+
+- feat(openai): serialise dispatch + structured rate-limit log
+
+
 ## [0.3.31] - 2026-05-11
 
 - fix(gallery): 0×0 dimensions, missing platform, broken view toggle
