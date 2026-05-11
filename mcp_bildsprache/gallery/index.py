@@ -133,8 +133,16 @@ def scan_index(data_dir: Path, public_base_url: str) -> list[GalleryEntry]:
         prompt = str(sidecar.get("prompt", ""))
         model = str(sidecar.get("model", ""))
         cost_estimate = str(sidecar.get("cost_estimate", ""))
-        width, height = _parse_dimensions(sidecar.get("dimensions"))
-        platform = sidecar.get("platform")
+
+        # Sidecar schema is union of legacy (top-level dimensions/platform)
+        # and the post-CDI-1014 ai_attribution shape (under `params`). New
+        # sidecars from generate_image / generate_diagram only populate
+        # `params`. Read top-level first, fall back to params.
+        params = sidecar.get("params") if isinstance(sidecar.get("params"), dict) else {}
+        width, height = _parse_dimensions(
+            sidecar.get("dimensions") or params.get("dimensions")
+        )
+        platform = sidecar.get("platform") or params.get("platform")
         if platform is not None and not isinstance(platform, str):
             platform = str(platform)
 
@@ -157,13 +165,20 @@ def scan_index(data_dir: Path, public_base_url: str) -> list[GalleryEntry]:
         hosted_url = _derive_hosted_url(sidecar, webp_rel, public_base_url)
 
         if width is None or height is None:
-            # Minimal requirement: we need dims to display. Try the filename: "...-WxH.webp".
+            # Filename fallback: scan for the first `<W>x<H>` segment
+            # anywhere in the stem. The naive last-segment check missed
+            # files with a collision suffix like
+            # `...-1200x1200-0fae.webp` because the last segment is the
+            # hex suffix, not the dimensions.
+            import re as _re
+
             stem = webp_path.stem
-            if "-" in stem:
-                last = stem.rsplit("-", 1)[-1]
-                w2, h2 = _parse_dimensions(last)
-                if w2 and h2:
-                    width, height = w2, h2
+            m = _re.search(r"(\d{2,5})x(\d{2,5})", stem)
+            if m:
+                try:
+                    width, height = int(m.group(1)), int(m.group(2))
+                except ValueError:
+                    pass
         if width is None or height is None:
             width = width or 0
             height = height or 0

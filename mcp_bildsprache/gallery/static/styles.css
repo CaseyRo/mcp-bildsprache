@@ -339,6 +339,18 @@ main {
   margin: 0 auto;
 }
 
+/*
+ * Bug fix 2026-05-11: the explicit `display: grid` / `display: ...` rules
+ * on .view-grid / .view-list have higher specificity than the user-agent
+ * `[hidden] { display: none }` rule and therefore override it. Without
+ * the `!important` below (or a `:not([hidden])` selector wrapping every
+ * display rule), the JS view-toggle never actually hides either pane —
+ * grid and list both render at the same time.
+ */
+[hidden] {
+  display: none !important;
+}
+
 .view-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
