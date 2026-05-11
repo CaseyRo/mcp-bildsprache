@@ -186,6 +186,7 @@ function renderList() {
       },
       el("td", { class: "prompt" }, dash(entry.prompt)),
       el("td", { class: "mono" }, dash(entry.brand)),
+      el("td", { class: "mono" }, dash(entry.platform)),
       el("td", { class: "date" }, formatDate(entry.created_at)),
       el("td", { class: "dims" }, `${entry.width}×${entry.height}`),
       el("td", { class: "mono" }, dash(entry.model)),

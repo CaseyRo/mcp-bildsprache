@@ -222,3 +222,65 @@ class TestPagination:
         total, items = idx.filter_and_sort(limit=1000)
         assert total == 600
         assert len(items) == 500
+
+
+# ---------------------------------------------------------------------------
+# Bug fixes 2026-05-11 — gallery wasn't reading new ai_attribution sidecars.
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionSchemaSidecars:
+    """New attribution-schema sidecars store dimensions + platform under
+    `params`, not top-level. The old reader missed them entirely."""
+
+    def test_dimensions_read_from_params(self, tmp_path: Path):
+        d = tmp_path / "casey"
+        d.mkdir()
+        stem = "brand-casey-one-voice-1200x1200-0fae"
+        webp = d / f"{stem}.webp"
+        sidecar = d / f"{stem}.json"
+        webp.write_bytes(b"fakewebp")
+        sidecar.write_text(json.dumps({
+            "model": "gpt-image-2",
+            "prompt": "kitchen scene",
+            "params": {"platform": "linkedin-post", "dimensions": "1200x1200"},
+            "hosted_url": "https://img/casey/x.webp",
+        }))
+        entries = scan_index(tmp_path, "https://img")
+        assert len(entries) == 1
+        assert (entries[0].width, entries[0].height) == (1200, 1200)
+        assert entries[0].platform == "linkedin-post"
+
+    def test_top_level_dimensions_still_win_when_present(self, tmp_path: Path):
+        """Legacy sidecars with both top-level + params shouldn't be
+        confused — top-level takes priority for backward-compat."""
+        d = tmp_path / "casey"
+        d.mkdir()
+        stem = "legacy-1024x1024"
+        (d / f"{stem}.webp").write_bytes(b"fakewebp")
+        (d / f"{stem}.json").write_text(json.dumps({
+            "model": "gpt-image-2",
+            "dimensions": "1024x1024",
+            "platform": "linkedin-article",
+            "params": {"dimensions": "2400x1200", "platform": "blog-hero"},
+            "hosted_url": "https://img/casey/x.webp",
+        }))
+        entries = scan_index(tmp_path, "https://img")
+        assert (entries[0].width, entries[0].height) == (1024, 1024)
+        assert entries[0].platform == "linkedin-article"
+
+    def test_filename_with_collision_suffix_still_parses(self, tmp_path: Path):
+        """Files named `...-1200x1200-0fae.webp` (with the SHA collision
+        suffix) were previously parsed as 0×0 because the naive
+        rsplit('-', 1) returned only the hex suffix."""
+        d = tmp_path / "casey"
+        d.mkdir()
+        stem = "long-name-with-many-segments-1200x1200-0fae"
+        (d / f"{stem}.webp").write_bytes(b"fakewebp")
+        # Sidecar with NO dimensions at all — force the filename fallback.
+        (d / f"{stem}.json").write_text(json.dumps({
+            "model": "gpt-image-2",
+            "hosted_url": "https://img/casey/x.webp",
+        }))
+        entries = scan_index(tmp_path, "https://img")
+        assert (entries[0].width, entries[0].height) == (1200, 1200)
