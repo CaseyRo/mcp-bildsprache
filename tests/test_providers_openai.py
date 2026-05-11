@@ -220,6 +220,113 @@ class TestRateLimitBackoff:
         with pytest.raises(OpenAIRateLimited):
             await generate_openai("prompt")
 
+    async def test_exhausted_budget_emits_structured_log(
+        self,
+        httpx_mock: HTTPXMock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """3.6: On 429 budget exhaustion, emit a single structured log line
+        downstream tooling can grep for (`event=image_rate_limited
+        provider=openai endpoint=generations`)."""
+        import asyncio as _asyncio
+        import logging
+
+        async def _noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(_asyncio, "sleep", _noop)
+        for _ in range(4):
+            httpx_mock.add_response(status_code=429, json={"error": "rate_limit"})
+
+        with caplog.at_level(logging.ERROR, logger="mcp_bildsprache.providers.openai"):
+            with pytest.raises(OpenAIRateLimited):
+                await generate_openai("prompt")
+
+        assert any(
+            "event=image_rate_limited" in rec.getMessage()
+            and "provider=openai" in rec.getMessage()
+            and "endpoint=generations" in rec.getMessage()
+            for rec in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+
+    async def test_exhausted_budget_edits_emits_structured_log(
+        self,
+        httpx_mock: HTTPXMock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """3.6 (edits): same structured event, endpoint=edits."""
+        import asyncio as _asyncio
+        import logging
+
+        async def _noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(_asyncio, "sleep", _noop)
+        for _ in range(4):
+            httpx_mock.add_response(
+                url="https://api.openai.com/v1/images/edits",
+                status_code=429,
+                json={"error": "rate_limit"},
+            )
+
+        with caplog.at_level(logging.ERROR, logger="mcp_bildsprache.providers.openai"):
+            with pytest.raises(OpenAIRateLimited):
+                await generate_openai("prompt", reference_images=[b"ref"])
+
+        assert any(
+            "event=image_rate_limited" in rec.getMessage()
+            and "endpoint=edits" in rec.getMessage()
+            for rec in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+
+
+class TestDispatchSemaphore:
+    """3.5: per-process semaphore serialises OpenAI dispatch (Tier 1 posture)."""
+
+    async def test_semaphore_serialises_concurrent_calls(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        import asyncio
+        import time
+
+        # Two slow responses — if calls fanned out in parallel, total elapsed
+        # would be ~0.2s; serial dispatch yields ~0.4s. We assert the serial
+        # ordering by checking max-in-flight observed in a counter, not
+        # wall-clock (more deterministic under CI variability).
+        in_flight = 0
+        max_in_flight = 0
+        lock = asyncio.Lock()
+
+        async def _slow_response(request):
+            nonlocal in_flight, max_in_flight
+            async with lock:
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+            try:
+                await asyncio.sleep(0.05)
+                import httpx
+                return httpx.Response(
+                    200, json=_response_body(usage={"input_tokens": 1, "output_tokens": 1})
+                )
+            finally:
+                async with lock:
+                    in_flight -= 1
+
+        httpx_mock.add_callback(_slow_response)
+        httpx_mock.add_callback(_slow_response)
+        httpx_mock.add_callback(_slow_response)
+
+        results = await asyncio.gather(
+            generate_openai("a"),
+            generate_openai("b"),
+            generate_openai("c"),
+        )
+        assert all(r.model for r in results)
+        # Tier 1 = serial only. If parallel had been allowed, this would be > 1.
+        assert max_in_flight == 1, f"expected serial dispatch, saw {max_in_flight} concurrent"
+
 
 class TestReferenceImages:
     async def test_reference_images_route_to_edits_endpoint(

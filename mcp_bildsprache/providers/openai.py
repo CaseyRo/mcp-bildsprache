@@ -60,6 +60,14 @@ _MAX_PIXELS = 8_294_400
 _QUALITIES = ("low", "medium", "high", "auto")
 
 
+# Tier-1 OpenAI rate limit is 5 IPM. Serialise dispatch at the process level
+# so concurrent MCP calls don't fan-out and burn the per-minute budget faster
+# than the backoff loop can recover. One process-wide gate covers both
+# /generations and /edits because the 5 IPM ceiling is shared across the
+# images surface.
+_OPENAI_DISPATCH_LOCK = asyncio.Semaphore(1)
+
+
 class OpenAISizeError(ValueError):
     """Raised when the requested size cannot be made OpenAI-compliant."""
 
@@ -252,7 +260,7 @@ async def generate_openai(
         # Don't set Content-Type — httpx sets the multipart boundary.
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client, _OPENAI_DISPATCH_LOCK:
         if reference_images:
             # Reference-bearing path: POST /v1/images/edits with multipart
             # `image[]` uploads. Per the brief's hero shots (which used
@@ -354,6 +362,11 @@ async def _post_with_backoff(
             _raise_for_status_with_body(response)
             return response
         if delay is None:
+            logger.error(
+                "event=image_rate_limited provider=openai endpoint=generations "
+                "attempts=%d budget_exhausted=true",
+                len(delays),
+            )
             raise OpenAIRateLimited(
                 "openai: 429 after retry budget exhausted (3 retries, ~15s)"
             )
@@ -386,6 +399,11 @@ async def _post_multipart_with_backoff(
             _raise_for_status_with_body(response)
             return response
         if delay is None:
+            logger.error(
+                "event=image_rate_limited provider=openai endpoint=edits "
+                "attempts=%d budget_exhausted=true",
+                len(delays),
+            )
             raise OpenAIRateLimited(
                 "openai: 429 after retry budget exhausted (edits endpoint)"
             )
