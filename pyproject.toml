@@ -16,6 +16,9 @@ dependencies = [
     "python-slugify>=8.0.0",
     "pyyaml>=6.0",
     "jsonschema>=4.0",
+    # Security floors (transitive deps of fastmcp; pinned to address CVEs)
+    "authlib>=1.7.0",            # GHSA: CSRF in token cache handling
+    "python-multipart>=0.0.27",  # GHSA: DoS via unbounded multipart headers
 ]
 
 [project.scripts]
