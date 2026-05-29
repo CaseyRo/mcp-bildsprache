@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.34] - 2026-05-29
+
+- fix(gemini): constrain render size so calls fit the MCP portal budget
+
+
 ## [0.3.32] - 2026-05-11
 
 - feat(openai): serialise dispatch + structured rate-limit log
