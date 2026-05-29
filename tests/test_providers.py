@@ -409,7 +409,7 @@ class TestGeminiSizeConfig:
         assert _image_size_for(2048, 2048) == "2K"
 
     @pytest.mark.anyio
-    async def test_payload_sets_response_format_for_gemini3(self, httpx_mock):
+    async def test_payload_sets_image_config_for_gemini3(self, httpx_mock):
         """The 3.x model gets both aspectRatio and imageSize; no 4K default."""
         import base64 as b64mod
         import json as _json
@@ -439,10 +439,13 @@ class TestGeminiSizeConfig:
         # First (and only successful) request goes to the 3.x model.
         request = httpx_mock.get_request()
         assert "gemini-3" in str(request.url)
+        # Auth is via header, never the URL query string (no key leak in errors).
+        assert "key=" not in str(request.url)
+        assert request.headers.get("x-goog-api-key") == "test-key"
         body = _json.loads(request.content)
-        image_fmt = body["generationConfig"]["responseFormat"]["image"]
-        assert image_fmt["aspectRatio"] == "3:2"
-        assert image_fmt["imageSize"] == "2K"
+        image_cfg = body["generationConfig"]["imageConfig"]
+        assert image_cfg["aspectRatio"] == "3:2"
+        assert image_cfg["imageSize"] == "2K"
         # The redundant "Target dimensions" hint is gone now that the aspect
         # ratio is set structurally.
         assert "Target dimensions" not in body["contents"][0]["parts"][0]["text"]
@@ -481,9 +484,9 @@ class TestGeminiSizeConfig:
         # The second request is the 2.5-flash call.
         last = httpx_mock.get_requests()[-1]
         assert "gemini-2.5-flash-image" in str(last.url)
-        image_fmt = _json.loads(last.content)["generationConfig"]["responseFormat"]["image"]
-        assert "aspectRatio" in image_fmt
-        assert "imageSize" not in image_fmt
+        image_cfg = _json.loads(last.content)["generationConfig"]["imageConfig"]
+        assert "aspectRatio" in image_cfg
+        assert "imageSize" not in image_cfg
 
 
 class TestRecraftProvider:

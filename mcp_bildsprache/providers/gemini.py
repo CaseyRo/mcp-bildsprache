@@ -163,7 +163,11 @@ async def _generate_with_model(
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> ProviderResult:
     """Generate with a specific Gemini model."""
-    url = f"{GEMINI_URL}/{model}:generateContent?key={api_key}"
+    # Auth via header, not the URL query string: a non-2xx response raises an
+    # httpx error whose message includes the request URL, so a `?key=` would
+    # leak the API key into error text surfaced to the MCP client (CDI-1163).
+    url = f"{GEMINI_URL}/{model}:generateContent"
+    headers = {"x-goog-api-key": api_key}
 
     parts: list[dict] = [
         {
@@ -187,22 +191,27 @@ async def _generate_with_model(
     # native 4K, which exceeds the MCP portal request budget (CDI-1163). We set
     # the closest supported aspect ratio always, and imageSize only for the 3.x
     # models — 2.5-flash is fixed ~1024px and rejects/ignores imageSize.
-    image_format: dict[str, str] = {
+    #
+    # For the :generateContent endpoint the field is generationConfig.imageConfig
+    # (camelCase, keys directly inside). The `responseFormat.image` shape only
+    # applies to the separate /v1beta/interactions endpoint and is rejected here
+    # with HTTP 400.
+    image_config: dict[str, str] = {
         "aspectRatio": _closest_aspect_ratio(width, height),
     }
     if model.startswith("gemini-3"):
-        image_format["imageSize"] = _image_size_for(width, height)
+        image_config["imageSize"] = _image_size_for(width, height)
 
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": {
             "responseModalities": ["TEXT", "IMAGE"],
-            "responseFormat": {"image": image_format},
+            "imageConfig": image_config,
         },
     }
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, json=payload)
+        response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         data = response.json()
 
