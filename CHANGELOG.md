@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.35] - 2026-05-29
+
+- fix(gemini): use generationConfig.imageConfig + header auth (CDI-1163 follow-up)
+
+
 ## [0.3.34] - 2026-05-29
 
 - fix(gemini): constrain render size so calls fit the MCP portal budget
