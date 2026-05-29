@@ -43,8 +43,9 @@ class TestEnsureApiKey:
             s = Settings()
         key = s.ensure_api_key()
         assert key.startswith("bmcp_")
-        # Should be stored on the instance now
-        assert s.mcp_bildsprache_api_key == key
+        # Should be stored on the instance now. The field is a SecretStr
+        # (since 4fe6b83), so compare the unwrapped value.
+        assert s.mcp_bildsprache_api_key.get_secret_value() == key
 
 
 class TestBaseUrl:
