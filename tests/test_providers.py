@@ -379,6 +379,113 @@ class TestGeminiReferences:
         assert "text" in parts[0]
 
 
+class TestGeminiSizeConfig:
+    """CDI-1163: constrain render size so calls fit the MCP portal budget."""
+
+    def test_closest_aspect_ratio_landscape(self):
+        from mcp_bildsprache.providers.gemini import _closest_aspect_ratio
+
+        # 1536x1024 == 3:2 exactly.
+        assert _closest_aspect_ratio(1536, 1024) == "3:2"
+        # 1920x1080 == 16:9.
+        assert _closest_aspect_ratio(1920, 1080) == "16:9"
+        # Square.
+        assert _closest_aspect_ratio(1200, 1200) == "1:1"
+        # Portrait.
+        assert _closest_aspect_ratio(1024, 1536) == "2:3"
+
+    def test_closest_aspect_ratio_degenerate(self):
+        from mcp_bildsprache.providers.gemini import _closest_aspect_ratio
+
+        assert _closest_aspect_ratio(0, 100) == "1:1"
+        assert _closest_aspect_ratio(100, 0) == "1:1"
+
+    def test_image_size_tier(self):
+        from mcp_bildsprache.providers.gemini import _image_size_for
+
+        assert _image_size_for(1024, 1024) == "1K"
+        assert _image_size_for(1264, 800) == "1K"
+        assert _image_size_for(1536, 1024) == "2K"
+        assert _image_size_for(2048, 2048) == "2K"
+
+    @pytest.mark.anyio
+    async def test_payload_sets_response_format_for_gemini3(self, httpx_mock):
+        """The 3.x model gets both aspectRatio and imageSize; no 4K default."""
+        import base64 as b64mod
+        import json as _json
+
+        from mcp_bildsprache.providers.gemini import generate_gemini
+
+        png_bytes = _fake_png_bytes()
+        b64 = b64mod.b64encode(png_bytes).decode()
+        httpx_mock.add_response(
+            json={
+                "candidates": [{
+                    "content": {"parts": [{
+                        "inlineData": {"data": b64, "mimeType": "image/png"}
+                    }]}
+                }]
+            },
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            test_settings = Settings()
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", test_settings)
+
+            await generate_gemini("test prompt", 1536, 1024)
+
+        # First (and only successful) request goes to the 3.x model.
+        request = httpx_mock.get_request()
+        assert "gemini-3" in str(request.url)
+        body = _json.loads(request.content)
+        image_fmt = body["generationConfig"]["responseFormat"]["image"]
+        assert image_fmt["aspectRatio"] == "3:2"
+        assert image_fmt["imageSize"] == "2K"
+        # The redundant "Target dimensions" hint is gone now that the aspect
+        # ratio is set structurally.
+        assert "Target dimensions" not in body["contents"][0]["parts"][0]["text"]
+
+    @pytest.mark.anyio
+    async def test_image_size_omitted_for_25_flash(self, httpx_mock):
+        """2.5-flash is fixed ~1024px; imageSize must not be sent to it."""
+        import base64 as b64mod
+        import json as _json
+
+        from mcp_bildsprache.providers.gemini import generate_gemini
+
+        png_bytes = _fake_png_bytes()
+        b64 = b64mod.b64encode(png_bytes).decode()
+        # First model (3.1) fails, second model (2.5-flash) succeeds.
+        httpx_mock.add_response(status_code=503)
+        httpx_mock.add_response(
+            json={
+                "candidates": [{
+                    "content": {"parts": [{
+                        "inlineData": {"data": b64, "mimeType": "image/png"}
+                    }]}
+                }]
+            },
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            test_settings = Settings()
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", test_settings)
+
+            result = await generate_gemini("test prompt", 1536, 1024)
+
+        assert result.model == "gemini-2.5-flash-image"
+        # The second request is the 2.5-flash call.
+        last = httpx_mock.get_requests()[-1]
+        assert "gemini-2.5-flash-image" in str(last.url)
+        image_fmt = _json.loads(last.content)["generationConfig"]["responseFormat"]["image"]
+        assert "aspectRatio" in image_fmt
+        assert "imageSize" not in image_fmt
+
+
 class TestRecraftProvider:
     @pytest.mark.anyio
     async def test_returns_provider_result(self, httpx_mock):
