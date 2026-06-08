@@ -18,7 +18,7 @@ dependencies = [
     "jsonschema>=4.0",
     # Security floors (transitive deps of fastmcp; pinned to address CVEs)
     "authlib>=1.7.0",            # GHSA: CSRF in token cache handling
-    "python-multipart>=0.0.30",  # GHSA: DoS via unbounded multipart headers
+    "python-multipart>=0.0.32",  # GHSA: DoS via unbounded multipart headers
 ]
 
 [project.scripts]
