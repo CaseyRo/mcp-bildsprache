@@ -15,6 +15,7 @@ import pytest
 from mcp_bildsprache.attribution import (
     SCHEMA_VERSION,
     build_attribution,
+    estimate_cost_eur,
     format_legacy_cost_estimate,
 )
 from mcp_bildsprache.types import ProviderResult
@@ -305,3 +306,41 @@ class TestModelVersion:
     def test_bfl_falls_back_to_model_id(self) -> None:
         p = build_attribution(provider_result=_bfl_result(), prompt_anchor="x")
         assert p["model_version"] == "flux-2-pro"
+
+
+class TestEstimateCostEur:
+    """Pre-call cost estimate used by the cost-confirmation elicitation."""
+
+    def test_openai_default_model_returns_positive_eur(self) -> None:
+        est = estimate_cost_eur(provider="openai", width=1024, height=1024)
+        assert est is not None
+        assert est > 0
+
+    def test_gemini_default_model_returns_positive_eur(self) -> None:
+        est = estimate_cost_eur(provider="gemini", width=1024, height=1024)
+        assert est is not None
+        assert est > 0
+
+    def test_explicit_gpt_image_mini_cheaper_than_default(self) -> None:
+        default = estimate_cost_eur(provider="openai", model="gpt-image-2", width=1024, height=1024)
+        mini = estimate_cost_eur(
+            provider="openai", model="gpt-image-1-mini", width=1024, height=1024
+        )
+        assert default is not None and mini is not None
+        assert mini < default
+
+    def test_larger_dimensions_cost_at_least_as_much(self) -> None:
+        small = estimate_cost_eur(provider="gemini", width=512, height=512)
+        large = estimate_cost_eur(provider="gemini", width=4096, height=4096)
+        assert small is not None and large is not None
+        assert large >= small
+
+    def test_unknown_provider_returns_none_no_raise(self) -> None:
+        assert estimate_cost_eur(provider="not-a-provider", width=1024, height=1024) is None
+
+    def test_unknown_model_falls_back_to_provider_default(self) -> None:
+        # An unknown model id should not raise — it degrades to the provider's
+        # default row so the elicitation still gets a number.
+        est = estimate_cost_eur(provider="openai", model="totally-made-up", width=1024, height=1024)
+        assert est is not None
+        assert est > 0

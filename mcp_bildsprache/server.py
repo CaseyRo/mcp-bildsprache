@@ -36,6 +36,7 @@ from mcp_bildsprache.providers.recraft import generate_recraft
 from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
 from mcp_bildsprache.attribution import (
     build_attribution,
+    estimate_cost_eur,
     format_legacy_cost_estimate,
     get_contract_state,
     validate_shared_contract,
@@ -153,6 +154,59 @@ async def _info(ctx: Context | None, message: str) -> None:
         await ctx.info(message)
     except Exception:  # pragma: no cover — telemetry must never break generation
         logger.debug("ctx.info failed", exc_info=True)
+
+
+async def _confirm_cost(
+    ctx: Context | None,
+    *,
+    what: str,
+    estimated_cost_eur: float | None,
+    provider: str,
+) -> bool:
+    """Defensively elicit a yes/no cost confirmation before a paid call.
+
+    Returns ``True`` to PROCEED with generation, ``False`` to ABORT (the user
+    explicitly declined or cancelled).
+
+    Defensive-elicit contract (rule 4): elicitation is an *optional* client
+    capability. fastmcp raises when the client/portal has no elicitation
+    handler, so any failure here — unsupported, transport error, timeout — is
+    treated as "proceed" so paid generation NEVER breaks for clients that
+    can't prompt. The ``destructiveHint`` annotation already warns those
+    clients that cost is incurred. Only an explicit decline/cancel from a
+    client that *does* support elicitation aborts the call.
+    """
+    if ctx is None:
+        # Direct (unit-test / programmatic) calls have no client to prompt.
+        return True
+
+    cost_str = (
+        f"~€{estimated_cost_eur:.4f}" if estimated_cost_eur is not None else "an unknown amount"
+    )
+    message = (
+        f"{what} via {provider} will call a paid image-generation API and "
+        f"incur approximately {cost_str}. Proceed?"
+    )
+    try:
+        result = await ctx.elicit(message, response_type=bool)
+    except Exception:
+        # Client doesn't support elicitation (or it errored). Proceed — the
+        # destructiveHint annotation already surfaced the cost warning.
+        logger.debug("cost-confirmation elicitation unavailable; proceeding", exc_info=True)
+        return True
+
+    action = getattr(result, "action", None)
+    if action == "accept":
+        # response_type=bool → result.data is the user's yes/no. A literal
+        # "no" (False) is an explicit decline even though the action is
+        # "accept". Treat None/missing as accept (proceed).
+        data = getattr(result, "data", None)
+        return data is not False
+    if action in ("decline", "cancel"):
+        return False
+    # Unknown action shape — fail open (proceed) rather than block on a paid
+    # tool the user asked to run.
+    return True
 
 
 def _read_reference_bytes(path: Path) -> bytes:
@@ -492,6 +546,29 @@ async def generate_image(
 
     fallback_map = REFERENCE_FALLBACKS if has_refs else FALLBACKS
 
+    # Cost-confirmation gate (defensive elicit). Surface the estimated EUR
+    # cost — the same compute_cost math the post-call ai_attribution uses —
+    # before spending money. No-op for clients without elicitation support.
+    est_cost = estimate_cost_eur(
+        provider=selected_provider,
+        model=specific_model,
+        width=w,
+        height=h,
+    )
+    if not await _confirm_cost(
+        ctx, what="Generating this image", estimated_cost_eur=est_cost, provider=selected_provider
+    ):
+        await _info(ctx, "Image generation cancelled by user at cost confirmation")
+        return {
+            "cancelled": True,
+            "response_mode": "cancelled",
+            "brand_context": context,
+            "platform": platform,
+            "dimensions": f"{w}x{h}",
+            "model": specific_model or selected_provider,
+            "estimated_cost_eur": est_cost,
+        }
+
     await _progress(
         ctx, 2, 5, f"Generating image via {selected_provider} (this can take 30-60s)"
     )
@@ -785,6 +862,28 @@ async def generate_diagram(
                 kwargs["model"] = model_id
             return await provider_fn(enhanced_prompt, w, h, **kwargs)
         return await provider_fn(enhanced_prompt, w, h, **kwargs)
+
+    # Cost-confirmation gate (defensive elicit) before the paid render.
+    est_cost = estimate_cost_eur(
+        provider=selected_provider,
+        model=specific_model,
+        width=w,
+        height=h,
+    )
+    if not await _confirm_cost(
+        ctx, what="Rendering this diagram", estimated_cost_eur=est_cost, provider=selected_provider
+    ):
+        await _info(ctx, "Diagram generation cancelled by user at cost confirmation")
+        return {
+            "cancelled": True,
+            "response_mode": "cancelled",
+            "brand_context": "casey",
+            "register": register,
+            "format": format,
+            "dimensions": f"{w}x{h}",
+            "model": specific_model or selected_provider,
+            "estimated_cost_eur": est_cost,
+        }
 
     await _progress(
         ctx, 2, 4, f"Rendering diagram via {selected_provider} (this can take 30-60s)"
