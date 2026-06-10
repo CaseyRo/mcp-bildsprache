@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.39] - 2026-06-10
+
+- ci: bump actions to node24 majors (#25)
+
+
 ## [0.3.38] - 2026-06-10
 
 - ci(deps): bump actions/checkout from 4 to 6 (#6)
