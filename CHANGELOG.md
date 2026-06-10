@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.40] - 2026-06-10
+
+- feat(bildsprache): defensive cost-confirmation elicit on paid generation (shelf) (#26)
+
+
 ## [0.3.39] - 2026-06-10
 
 - ci: bump actions to node24 majors (#25)
