@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from mcp.types import Icon
 
 from pathlib import Path
@@ -22,6 +22,7 @@ from mcp_bildsprache.identity import (
 from mcp_bildsprache.pipeline import process_image
 from mcp_bildsprache.presets import (
     CASEY_COMPOSITION_CLAUSE,
+    CASEY_REGISTER_OVERLAYS,
     PLATFORM_SIZES,
     PRESETS,
     get_dimensions,
@@ -38,6 +39,13 @@ from mcp_bildsprache.attribution import (
     format_legacy_cost_estimate,
     get_contract_state,
     validate_shared_contract,
+)
+from mcp_bildsprache.models import (
+    GenerateDiagramResult,
+    GenerateImageResult,
+    GeneratePromptResult,
+    ModelsResult,
+    VisualPresetsResult,
 )
 from mcp_bildsprache.types import (
     IdentityPack,
@@ -121,6 +129,32 @@ REFERENCE_FALLBACKS: dict[str, str | None] = {
 _REFERENCE_BYTES_CACHE: dict[Path, bytes] = {}
 
 
+async def _progress(ctx: Context | None, progress: float, total: float, message: str) -> None:
+    """Report progress over the MCP channel when a Context is present.
+
+    Long generations (native-4K Gemini, OpenAI backoff retries) take 30-60s+
+    and look hung to the client without this. No-op when ctx is None (e.g.
+    direct unit-test calls), and best-effort: a progress/log failure never
+    aborts generation.
+    """
+    if ctx is None:
+        return
+    try:
+        await ctx.report_progress(progress=progress, total=total, message=message)
+    except Exception:  # pragma: no cover — telemetry must never break generation
+        logger.debug("ctx.report_progress failed", exc_info=True)
+
+
+async def _info(ctx: Context | None, message: str) -> None:
+    """Emit an info-level log over the MCP channel when a Context is present."""
+    if ctx is None:
+        return
+    try:
+        await ctx.info(message)
+    except Exception:  # pragma: no cover — telemetry must never break generation
+        logger.debug("ctx.info failed", exc_info=True)
+
+
 def _read_reference_bytes(path: Path) -> bytes:
     """Read ``path`` once per process; subsequent reads return the cached bytes."""
     cached = _REFERENCE_BYTES_CACHE.get(path)
@@ -195,8 +229,52 @@ def _build_auth():
     return BearerTokenVerifier(api_key)
 
 
+SERVER_INSTRUCTIONS = """\
+Bildsprache turns a text prompt into a brand-aware, hosted image or diagram.
+It injects a locked brand visual preset, calls a paid image-generation API,
+post-processes (resize/crop -> WebP -> EXIF provenance), and stores the
+result, returning a public `hosted_url` plus an `ai_attribution` block with
+real EUR cost math and provenance flags.
+
+Choosing a tool:
+- `generate_image` — the full raster pipeline. One call resolves identity +
+  brand preset + provider routing + sizing + storage + cost attribution.
+  Use for social/blog/OG/proposal imagery. Default provider: OpenAI
+  gpt-image-2. WRITES an artifact and incurs paid-API cost.
+- `generate_diagram` — flow / sequence / state diagrams from free-text or a
+  Mermaid source (flowchart/graph, sequenceDiagram, stateDiagram only).
+  Default provider: Gemini Nano Banana Pro (best in-image text). WRITES an
+  artifact and incurs paid-API cost.
+- `generate_prompt` — engineer the brand-injected prompt WITHOUT calling a
+  provider or spending money. Use to preview or for manual generation.
+- `list_models` — active vs. disabled providers, their costs, and which
+  identity packs are loaded.
+- `get_visual_presets` — brand visual DNA (palette, register overlays,
+  platform sizes). For voice/writing rules use klartext's get_brand_context.
+
+Brand semantics (May 2026 brand collapse): active brands are `casey` (one
+voice, two registers — `personal` warmer/kitchen-table, `professional`
+crisper/schematic) and `yorizon` (fully isolated, no casey palette tokens).
+Legacy keys (casey-berlin, cdit-works, @cdit, storykeep, nah, ...) normalise
+to `casey`.
+
+Routing split: raster -> OpenAI gpt-image-2 (Gemini is the cross-provider
+fallback target but is NOT auto-selected for raster); diagram -> Gemini Nano
+Banana Pro (OpenAI available via model_hint='openai').
+
+No-fallback policy: per an explicit user directive, raster generation has NO
+silent provider fallback — if OpenAI fails the error propagates rather than
+quietly handing off to Gemini. FLUX and Recraft are temporarily disabled at
+the dispatcher; hinting at them returns a PROVIDER_TEMPORARILY_DISABLED error
+naming the active replacement.
+
+Reference data (presets, palette, platform sizes, model capabilities) is also
+available as cacheable resources under the `bildsprache://` URI scheme.
+"""
+
 mcp = FastMCP(
     "mcp-bildsprache",
+    instructions=SERVER_INSTRUCTIONS,
     auth=_build_auth(),
     icons=[
         Icon(
@@ -251,7 +329,15 @@ async def _health_check_z(request: _SReq) -> _SResp:
     return await _health_check(request)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Generate Brand Image",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+)
 async def generate_image(
     prompt: str,
     context: BrandContext | None = None,
@@ -264,7 +350,8 @@ async def generate_image(
     reference_images: list[bytes] | None = None,
     include_dogs: bool | None = None,
     draft: bool = False,
-) -> dict:
+    ctx: Context | None = None,
+) -> GenerateImageResult:
     """[image] Generate a brand-aware image.
 
     Returns a hosted URL by default (when hosting is enabled). The image is
@@ -307,6 +394,7 @@ async def generate_image(
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
     # ------------------------------------------------------------------
+    await _progress(ctx, 0, 5, "Resolving identity and brand context")
     pack: IdentityPack | None = get_pack_for_context(context)
     resolved_paths: list[Path] = []
     used_identity_pack = False
@@ -314,10 +402,17 @@ async def generate_image(
     if reference_images:
         # Caller-supplied refs bypass the resolver entirely (per spec).
         refs_bytes: list[bytes] = list(reference_images)
+        await _info(ctx, f"Using {len(refs_bytes)} caller-supplied reference image(s)")
     elif pack is not None:
         resolved_paths = resolve_identity_for_call(pack, prompt, include_dogs=include_dogs)
         refs_bytes = [_read_reference_bytes(p) for p in resolved_paths]
         used_identity_pack = bool(refs_bytes)
+        if used_identity_pack:
+            await _info(
+                ctx,
+                f"Resolved identity pack '{context}' -> "
+                f"{len(refs_bytes)} reference slot(s)",
+            )
     else:
         refs_bytes = []
 
@@ -326,6 +421,7 @@ async def generate_image(
     # Determine provider. Per the May 2026 brand collapse, FLUX/Recraft
     # hints raise ProviderTemporarilyDisabled; surface as a clean MCP
     # error rather than a 500.
+    await _progress(ctx, 1, 5, "Routing to image provider")
     try:
         selected_provider = route_model(
             context=context,
@@ -335,6 +431,7 @@ async def generate_image(
             intent="raster",
         )
     except ProviderTemporarilyDisabled as e:
+        await _info(ctx, f"Provider hint rejected: {e.message}")
         return {
             "error": {
                 "code": "PROVIDER_TEMPORARILY_DISABLED",
@@ -395,6 +492,9 @@ async def generate_image(
 
     fallback_map = REFERENCE_FALLBACKS if has_refs else FALLBACKS
 
+    await _progress(
+        ctx, 2, 5, f"Generating image via {selected_provider} (this can take 30-60s)"
+    )
     try:
         provider_result = await _call_provider(selected_provider, specific_model)
     except Exception as e:
@@ -402,6 +502,9 @@ async def generate_image(
         fallback_provider = fallback_map.get(selected_provider)
         if not fallback_provider:
             raise
+        await _info(
+            ctx, f"{selected_provider} failed; falling back to {fallback_provider}"
+        )
         provider_result = await _call_provider(fallback_provider)
         fallback_used = True
         original_model = selected_provider
@@ -448,6 +551,7 @@ async def generate_image(
         result["fallback_reason"] = "provider_error"
 
     # Hosting pipeline: process → store → return hosted URL
+    await _progress(ctx, 3, 5, "Post-processing image (resize, crop, WebP, EXIF)")
     processed_bytes = process_image(
         provider_result=provider_result,
         target_width=w,
@@ -456,6 +560,7 @@ async def generate_image(
         brand_context=context,
     )
 
+    await _progress(ctx, 4, 5, "Storing image and writing provenance sidecar")
     hosted_url = store_image(
         image_data=processed_bytes,
         prompt=enhanced_prompt,
@@ -503,6 +608,7 @@ async def generate_image(
         fallback_used,
     )
 
+    await _progress(ctx, 5, 5, "Done")
     return result
 
 
@@ -510,7 +616,15 @@ DiagramFormatLiteral = Literal["flow", "sequence", "state"]
 DiagramModelHint = Literal["openai", "gemini", "gpt-image-2", "nano-banana-pro"]
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Generate Brand Diagram",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+)
 async def generate_diagram(
     format: DiagramFormatLiteral,
     prompt: str | None = None,
@@ -518,7 +632,8 @@ async def generate_diagram(
     register: Register = "professional",
     model_hint: DiagramModelHint | None = None,
     dimensions: str | None = None,
-) -> dict:
+    ctx: Context | None = None,
+) -> GenerateDiagramResult:
     """[image] Generate a brand-aware diagram (flow / sequence / state).
 
     Default routing is Gemini Nano Banana Pro — best in-image text legibility,
@@ -576,6 +691,7 @@ async def generate_diagram(
             },
         }
 
+    await _progress(ctx, 0, 4, "Parsing diagram spec")
     parsed = None
     if mermaid:
         try:
@@ -601,12 +717,14 @@ async def generate_diagram(
             }
 
     # Route to provider (default gemini for diagrams).
+    await _progress(ctx, 1, 4, "Routing to diagram provider")
     try:
         selected_provider = route_model(
             model_hint=model_hint,
             intent="diagram",
         )
     except ProviderTemporarilyDisabled as e:
+        await _info(ctx, f"Provider hint rejected: {e.message}")
         return {
             "error": {
                 "code": "PROVIDER_TEMPORARILY_DISABLED",
@@ -668,6 +786,9 @@ async def generate_diagram(
             return await provider_fn(enhanced_prompt, w, h, **kwargs)
         return await provider_fn(enhanced_prompt, w, h, **kwargs)
 
+    await _progress(
+        ctx, 2, 4, f"Rendering diagram via {selected_provider} (this can take 30-60s)"
+    )
     try:
         provider_result = await _call_provider(selected_provider, specific_model)
     except Exception as e:
@@ -679,6 +800,9 @@ async def generate_diagram(
         fallback_provider = FALLBACKS.get(selected_provider)
         if not fallback_provider:
             raise
+        await _info(
+            ctx, f"{selected_provider} failed; falling back to {fallback_provider}"
+        )
         provider_result = await _call_provider(fallback_provider)
         fallback_used = True
         original_provider = selected_provider
@@ -712,6 +836,7 @@ async def generate_diagram(
         result["intended_provider"] = original_provider
         result["fallback_reason"] = "provider_error"
 
+    await _progress(ctx, 3, 4, "Post-processing and storing diagram")
     processed_bytes = process_image(
         provider_result=provider_result,
         target_width=w,
@@ -751,10 +876,18 @@ async def generate_diagram(
         fallback_used,
     )
 
+    await _progress(ctx, 4, 4, "Done")
     return result
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Engineer Image Prompt",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def generate_prompt(
     prompt: str,
     context: BrandContext | None = None,
@@ -762,7 +895,7 @@ async def generate_prompt(
     model: Model | None = None,
     platform: Platform | None = None,
     mood: str | None = None,
-) -> dict:
+) -> GeneratePromptResult:
     """[image] Generate an engineered image prompt without generating the image.
 
     Useful for previewing what will be sent to the model, or for manual generation.
@@ -809,8 +942,15 @@ async def generate_prompt(
     }
 
 
-@mcp.tool
-async def list_models() -> dict:
+@mcp.tool(
+    annotations={
+        "title": "List Image Models",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+async def list_models() -> ModelsResult:
     """[image] List active image generation providers and their capabilities.
 
     Returns a mapping with ``providers`` (active providers reachable via the
@@ -869,11 +1009,18 @@ async def list_models() -> dict:
     }
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Get Visual Presets",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def get_visual_presets(
     context: BrandContext | None = None,
     register: Register | None = None,
-) -> dict:
+) -> VisualPresetsResult:
     """[image] Get visual style presets for image generation. For voice/writing rules, use klartext's get_brand_context instead.
 
     Active brands (May 2026 brand collapse): ``casey`` (with personal/professional
@@ -906,6 +1053,161 @@ async def get_visual_presets(
         "platforms": PLATFORM_SIZES,
         "identity_packs": {brand: True for brand in loaded},
     }
+
+
+# --- Resources: brand reference data ------------------------------------
+#
+# Reference data (presets, palette, platform sizes, model capabilities,
+# diagram formats, contract/status) is exposed as cacheable, citable
+# resources under the `bildsprache://` URI scheme. These mirror the same
+# in-memory sources the read tools serve, so a client can fetch context
+# once and cache it instead of round-tripping a tool call per lookup.
+
+
+@mcp.resource(
+    "bildsprache://presets",
+    name="Brand visual presets",
+    description="All brand visual presets plus the casey personal/professional register overlays.",
+    mime_type="application/json",
+)
+def resource_presets() -> dict:
+    """Full PRESETS map + casey register overlays (visual DNA per brand)."""
+    return {
+        "presets": PRESETS,
+        "casey_register_overlays": CASEY_REGISTER_OVERLAYS,
+    }
+
+
+@mcp.resource(
+    "bildsprache://palette/casey",
+    name="Casey botanical palette",
+    description="The locked casey botanical colour palette (hex/oklch/role) from the May 2026 brand-decisions doc.",
+    mime_type="application/json",
+)
+def resource_casey_palette() -> dict:
+    """Locked casey palette tokens (paper bone, forest moss, ...)."""
+    from mcp_bildsprache.presets import CASEY_PALETTE
+
+    return {"brand": "casey", "palette": CASEY_PALETTE}
+
+
+@mcp.resource(
+    "bildsprache://platforms",
+    name="Platform sizes",
+    description="Platform -> (width, height) auto-sizing table used by generate_image.",
+    mime_type="application/json",
+)
+def resource_platforms() -> dict:
+    """Platform sizing table (linkedin-post, blog-hero, og-image, ...)."""
+    return {
+        "platforms": {name: list(size) for name, size in PLATFORM_SIZES.items()},
+    }
+
+
+@mcp.resource(
+    "bildsprache://models",
+    name="Image model capabilities",
+    description="Active providers + costs, disabled providers, loaded identity packs, and diagram capabilities.",
+    mime_type="application/json",
+)
+async def resource_models() -> dict:
+    """Same payload as the list_models tool, addressable as a resource."""
+    return await list_models.fn()
+
+
+@mcp.resource(
+    "bildsprache://status",
+    name="Server status",
+    description="Server version, uptime, and the shared ai_attribution schema + cost-table contract state.",
+    mime_type="application/json",
+)
+def resource_status() -> dict:
+    """Contract + version status (mirrors the /health endpoint body)."""
+    contract = get_contract_state()
+    return {
+        "service": "mcp-bildsprache",
+        "version": _version,
+        "status": "healthy" if contract["healthy"] else "degraded",
+        "uptime_seconds": int(
+            (datetime.now(_tz.utc) - _start_time).total_seconds()
+        ),
+        "attribution": {
+            "schema_version": contract["schema_version"],
+            "cost_table_version": contract["cost_table_version"],
+            "providers_available": contract["providers_available"],
+        },
+    }
+
+
+# --- Prompts: guided multi-step workflows -------------------------------
+#
+# These encode the parameter combinatorics of the signature jobs so the
+# client follows the intended path (brand -> register -> platform -> mood,
+# or Mermaid -> register -> diagram) instead of rediscovering it per call.
+
+
+@mcp.prompt(
+    name="brand_image_brief",
+    description="Guided brief for a branded image: walks brand -> register -> platform -> mood, then calls generate_image.",
+)
+def brand_image_brief(
+    subject: str,
+    brand: str = "casey",
+    register: str = "professional",
+    platform: str = "linkedin-post",
+    mood: str = "",
+) -> str:
+    """Compose a brand_image_brief guidance message for generate_image."""
+    mood_line = (
+        f"- Mood/emotional register: {mood}\n"
+        if mood
+        else "- Mood: infer from the subject if helpful, else omit\n"
+    )
+    return (
+        "Create a brand-aware image with the `generate_image` tool.\n\n"
+        "Decision path (fill each, then call the tool once):\n"
+        f"- Subject: {subject}\n"
+        f"- context (brand): {brand}  "
+        "(active brands: casey, yorizon; legacy keys normalise to casey)\n"
+        f"- register: {register}  "
+        "(casey only — personal = warmer/kitchen-table, professional = crisper/schematic)\n"
+        f"- platform: {platform}  "
+        "(drives auto-sizing; or pass explicit dimensions='WxH')\n"
+        f"{mood_line}"
+        "\nBefore generating you may preview the engineered prompt with "
+        "`generate_prompt` (no provider call, no cost). Consult "
+        "`bildsprache://presets` and `bildsprache://platforms` for the exact "
+        "brand DNA and sizes. Then call `generate_image` and report the "
+        "returned hosted_url and ai_attribution cost."
+    )
+
+
+@mcp.prompt(
+    name="mermaid_to_diagram",
+    description="Guided workflow: take Mermaid source, pick a register, and render a brand-locked diagram via generate_diagram.",
+)
+def mermaid_to_diagram(
+    mermaid: str,
+    format: str = "flow",
+    register: str = "professional",
+) -> str:
+    """Compose a mermaid_to_diagram guidance message for generate_diagram."""
+    return (
+        "Render the following Mermaid source into a brand-locked diagram with "
+        "the `generate_diagram` tool.\n\n"
+        f"Mermaid source:\n```\n{mermaid.strip()}\n```\n\n"
+        "Decision path:\n"
+        f"- format: {format}  "
+        "(must match the Mermaid header — flow|sequence|state; other Mermaid "
+        "types are rejected)\n"
+        f"- register: {register}  "
+        "(personal = warmer/hand-drawn, professional = crisper/schematic)\n"
+        "- Default provider is Gemini Nano Banana Pro (best in-image text); "
+        "pass model_hint='openai' only if sibling-series consistency matters.\n\n"
+        "Call `generate_diagram(format=..., mermaid=..., register=...)` and "
+        "report the returned hosted_url. If you get MERMAID_FORMAT_MISMATCH, "
+        "set format to the value named in the error."
+    )
 
 
 def _mount_static_files(app) -> None:
