@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.38] - 2026-06-10
+
+- ci(deps): bump actions/checkout from 4 to 6 (#6)
+
+
 ## [0.3.35] - 2026-05-29
 
 - fix(gemini): use generationConfig.imageConfig + header auth (CDI-1163 follow-up)
