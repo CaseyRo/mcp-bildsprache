@@ -269,6 +269,99 @@ def _validate(payload: dict[str, Any]) -> None:
         )
 
 
+def estimate_cost_eur(
+    *,
+    provider: str,
+    model: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    tier: Tier = "standard",
+    image_format: Literal["raster", "vector"] = "raster",
+) -> float | None:
+    """Best-effort EUR cost estimate computed *before* a provider call.
+
+    Used to surface an estimated cost in the cost-confirmation elicitation,
+    which must run before any paid API call (so the real usage-based cost in
+    ``ai_attribution`` is not yet available).
+
+    For per-image models the listed unit price is exact. For per-token-usage
+    models (the active OpenAI/Gemini image models) the cost table carries
+    documented ``output_tokens_per_image`` reference counts keyed by the
+    longest output edge; we pick the nearest bucket and run the same
+    ``compute_cost`` math the post-call attribution uses, so the estimate and
+    the final figure are produced by one code path.
+
+    Returns ``None`` (never raises) when the model/provider is unknown or the
+    table can't be loaded — callers degrade to an unpriced confirmation.
+    """
+    try:
+        table = _get_cost_table()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("estimate_cost_eur: cost table load failed: %s", exc)
+        return None
+
+    if provider not in table:
+        return None
+    model_rows = table[provider]
+    if not isinstance(model_rows, dict):
+        return None
+
+    if model is None or model not in model_rows:
+        # Pick a sensible default model row for the provider.
+        if model and model in model_rows:
+            pass
+        elif "gpt-image-2" in model_rows:
+            model = "gpt-image-2"
+        elif "gemini-3.1-flash-image-preview" in model_rows:
+            model = "gemini-3.1-flash-image-preview"
+        else:
+            # First model row with a usable shape.
+            model = next(iter(model_rows), None)
+    if model is None or model not in model_rows:
+        return None
+
+    row = model_rows[model]
+    if not isinstance(row, dict):
+        return None
+
+    usage: Usage | None = None
+    if row.get("mode") == "per-token-usage":
+        # Estimate output tokens from the documented per-image reference
+        # counts (keyed by the longest output edge), nearest bucket.
+        per_image = row.get("output_tokens_per_image") or {}
+        out_tokens: int | None = None
+        if per_image:
+            longest_edge = max(width or 1024, height or 1024)
+            try:
+                buckets = sorted(int(k) for k in per_image)
+            except (TypeError, ValueError):
+                buckets = []
+            if buckets:
+                nearest = min(buckets, key=lambda b: abs(b - longest_edge))
+                out_tokens = int(per_image[str(nearest)])
+        if out_tokens is None:
+            # No reference table — fall back to a conservative 1120-token
+            # (~1K-image) figure so the estimate is in the right ballpark.
+            out_tokens = 1120
+        # A small, representative input-token count for the brand-injected
+        # prompt. Image-gen input is tiny relative to output.
+        usage = Usage(input_tokens=400, cached_input_tokens=0, output_tokens=out_tokens)
+
+    try:
+        result: CostResult = compute_cost(
+            table=table,
+            provider=provider,
+            model=model,
+            usage=usage,
+            tier=tier,
+            image_format=image_format,
+        )
+    except Exception as exc:
+        logger.debug("estimate_cost_eur: compute_cost failed for %s/%s: %s", provider, model, exc)
+        return None
+    return result.amount_eur
+
+
 def format_legacy_cost_estimate(payload: dict[str, Any]) -> str:
     """Derive the legacy 'cost_estimate' display string from the new cost block.
 
