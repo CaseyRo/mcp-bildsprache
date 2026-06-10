@@ -79,6 +79,14 @@ class GenerateImageResult(BaseModel):
         default=None,
         description="Structured error block (e.g. PROVIDER_TEMPORARILY_DISABLED) when the call was rejected before generation.",
     )
+    cancelled: Optional[bool] = Field(
+        default=None,
+        description="True when the user declined/cancelled the cost-confirmation prompt; no provider call was made and no artifact was written.",
+    )
+    estimated_cost_eur: Optional[float] = Field(
+        default=None,
+        description="Estimated EUR cost surfaced in the cost-confirmation prompt (only present when the user cancelled).",
+    )
 
 
 class GenerateDiagramResult(BaseModel):
@@ -114,6 +122,14 @@ class GenerateDiagramResult(BaseModel):
     error: Optional[dict[str, Any]] = Field(
         default=None,
         description="Structured error block (INVALID_INPUT, MERMAID_PARSE_ERROR, MERMAID_FORMAT_MISMATCH, INVALID_DIMENSIONS, INVALID_MODEL_HINT, PROVIDER_TEMPORARILY_DISABLED).",
+    )
+    cancelled: Optional[bool] = Field(
+        default=None,
+        description="True when the user declined/cancelled the cost-confirmation prompt; no provider call was made and no artifact was written.",
+    )
+    estimated_cost_eur: Optional[float] = Field(
+        default=None,
+        description="Estimated EUR cost surfaced in the cost-confirmation prompt (only present when the user cancelled).",
     )
 
 
