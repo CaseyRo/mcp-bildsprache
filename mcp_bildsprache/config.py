@@ -54,6 +54,24 @@ class Settings(BaseSettings):
     ledger_enabled: bool = True
     ledger_path: str = ""
 
+    # Async dispatch+poll budget (CDI-1266). Clients reach this server through a
+    # Cloudflare-managed MCP portal with a hard ~60s upstream read timeout we
+    # cannot change; gpt-image-2 / Nano-Banana-Pro renders take 50-80s, so a
+    # synchronous generate_image response is severed by the portal (-32001) even
+    # though the render completes server-side.
+    #
+    # generate_image / generate_diagram dispatch the render in the BACKGROUND
+    # (detached from the request scope so it survives request teardown) and then
+    # inline-wait up to `sync_wait_seconds` for it to finish. Fast renders return
+    # the hosted_url inline (backward compatible); slow ones return a {job_id,
+    # status: "pending"} handle the caller polls with get_image_result. Set well
+    # under the ~60s portal limit. `background=True` (per call) or
+    # `sync_wait_seconds=0` forces an immediate job-handle return.
+    sync_wait_seconds: int = 40
+    # Long-poll ceiling for get_image_result(wait_seconds=...). Caller-supplied
+    # wait_seconds is clamped to this so a poll can never exceed the portal budget.
+    poll_wait_max_seconds: int = 55
+
     # Identity packs (personal likeness reference images; private volume)
     identity_dir: Path = Path("/data/identity")
     identity_enabled: bool = True
