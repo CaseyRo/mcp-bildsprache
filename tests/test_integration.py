@@ -752,6 +752,210 @@ class TestProgressLogGuard:
 
 
 # ---------------------------------------------------------------------------
+# Generation outcome ledger wiring (CDI-1264)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerationLedgerWiring:
+    """One ledger line per attempt on the success AND failure paths, plus the
+    success-vs-teardown convention and the generation_stats tool."""
+
+    @staticmethod
+    def _point_ledger_at(tmp_path: Path, monkeypatch) -> Path:
+        """Route the (config-level) ledger at a tmp file and return its path."""
+        from mcp_bildsprache.config import settings as cfg
+
+        ledger_file = tmp_path / "_ledger" / "generations.jsonl"
+        monkeypatch.setattr(cfg, "ledger_enabled", True)
+        monkeypatch.setattr(cfg, "ledger_path", str(ledger_file))
+        return ledger_file
+
+    @pytest.mark.anyio
+    async def test_success_writes_exactly_one_line(
+        self, tmp_path: Path, mock_provider, monkeypatch
+    ):
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import generate_image
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_image(
+                prompt="ledger success", context="casey", dimensions="512x512"
+            )
+
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+        recs = ledmod.read_records(path=ledger_file)
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec["outcome"] == "success"
+        assert rec["model"] == "gpt-image-2"
+        assert rec["brand"] == "casey"
+        assert rec["delivery"] == "delivered"
+        assert rec["requested_size"] == "512x512"
+        assert "latency_ms" in rec
+        assert rec["hosted_url"] == result["hosted_url"]
+
+    @pytest.mark.anyio
+    async def test_failure_writes_exactly_one_line(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import generate_image
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+        failing = AsyncMock(side_effect=RuntimeError("OpenAI 500 boom"))
+
+        with patch("mcp_bildsprache.server.PROVIDERS", {"openai": failing, "gemini": failing}), \
+             patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            with pytest.raises(RuntimeError, match="OpenAI 500 boom"):
+                await generate_image(
+                    prompt="ledger failure", context="casey", dimensions="512x512"
+                )
+
+        recs = ledmod.read_records(path=ledger_file)
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec["outcome"] in ("provider_error", "other")
+        assert rec["error_category"] == "RuntimeError"
+        assert "OpenAI 500 boom" in rec["error_message"]
+        assert rec["brand"] == "casey"
+        assert "latency_ms" in rec
+
+    @pytest.mark.anyio
+    async def test_teardown_records_success_with_delivery_flag(
+        self, tmp_path: Path, mock_provider, monkeypatch
+    ):
+        """Closed-stream during delivery → outcome=success, delivery=teardown
+        (the image really did succeed; the caller just never got the URL)."""
+        import anyio
+
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import generate_image
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+
+        ctx = AsyncMock()
+        ctx.report_progress.side_effect = anyio.ClosedResourceError()
+        ctx.info.side_effect = anyio.ClosedResourceError()
+        ctx.elicit.side_effect = anyio.ClosedResourceError()
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_image(
+                prompt="torn render", context="casey", platform="blog-hero", ctx=ctx
+            )
+
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+        recs = ledmod.read_records(path=ledger_file)
+        assert len(recs) == 1
+        assert recs[0]["outcome"] == "success"
+        assert recs[0]["delivery"] == "teardown_closed_stream"
+
+    @pytest.mark.anyio
+    async def test_ledger_write_failure_never_breaks_generation(
+        self, tmp_path: Path, mock_provider, monkeypatch
+    ):
+        """Acceptance: a broken ledger append must not break the generation."""
+        from mcp_bildsprache.server import generate_image
+
+        # Point the ledger at an impossible path (parent is a file) so the
+        # best-effort append fails internally.
+        from mcp_bildsprache.config import settings as cfg
+
+        blocker = tmp_path / "blocker"
+        blocker.write_text("file-not-dir")
+        monkeypatch.setattr(cfg, "ledger_enabled", True)
+        monkeypatch.setattr(cfg, "ledger_path", str(blocker / "sub" / "led.jsonl"))
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_image(
+                prompt="resilient", context="casey", dimensions="512x512"
+            )
+
+        # Generation still succeeded despite the ledger write failing.
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+
+    @pytest.mark.anyio
+    async def test_generation_stats_happy_path(self, tmp_path: Path, monkeypatch):
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import generation_stats
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+        for outcome in ["success", "success", "provider_error"]:
+            ledmod.append_record(
+                ledmod.build_record(
+                    request_id=f"{outcome}-x",
+                    outcome=outcome,
+                    model="gpt-image-2",
+                    provider="openai",
+                    brand="casey",
+                    width=1024,
+                    height=1024,
+                ),
+                path=ledger_file,
+            )
+
+        stats = await generation_stats(days=30)
+        assert "error" not in stats
+        assert stats["totals"]["attempts"] == 3
+        assert stats["totals"]["successes"] == 2
+        by_model = {m["model"]: m for m in stats["by_model"]}
+        assert by_model["gpt-image-2"]["success_pct"] == 66.67
+
+    @pytest.mark.anyio
+    async def test_generation_stats_empty_returns_clean_zeros(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Unhappy/empty path: a window with no data → clean zeros, not error."""
+        from mcp_bildsprache.server import generation_stats
+
+        self._point_ledger_at(tmp_path, monkeypatch)
+        stats = await generation_stats(days=7)
+        assert "error" not in stats
+        assert stats["totals"]["attempts"] == 0
+        assert stats["totals"]["success_pct"] == 0.0
+        assert stats["by_model"] == []
+
+    @pytest.mark.anyio
+    async def test_generation_stats_invalid_since_returns_error(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from mcp_bildsprache.server import generation_stats
+
+        self._point_ledger_at(tmp_path, monkeypatch)
+        stats = await generation_stats(since="not-a-date")
+        assert stats["error"]["code"] == "INVALID_SINCE"
+
+
+# ---------------------------------------------------------------------------
 # generate_diagram (May 2026 brand-collapse follow-up)
 # ---------------------------------------------------------------------------
 

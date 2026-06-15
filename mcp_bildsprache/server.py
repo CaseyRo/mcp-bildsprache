@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+import time
+from typing import Callable, Literal
 
 from fastmcp import Context, FastMCP
 from mcp.types import Icon
@@ -45,10 +46,12 @@ from mcp_bildsprache.models import (
     GenerateDiagramResult,
     GenerateImageResult,
     GeneratePromptResult,
+    GenerationStatsResult,
     ModelsResult,
     RecentGenerationsResult,
     VisualPresetsResult,
 )
+from mcp_bildsprache import ledger as _ledger
 from mcp_bildsprache.types import (
     IdentityPack,
     ProviderResult,
@@ -159,7 +162,86 @@ except Exception:  # pragma: no cover — anyio always present in practice
     _CLOSED_STREAM_ERRORS = ()
 
 
-async def _progress(ctx: Context | None, progress: float, total: float, message: str) -> None:
+def _classify_generation_error(exc: BaseException) -> tuple[str, str]:
+    """Map a generation-path exception to (ledger_outcome, error_category).
+
+    Used so the outcome ledger (CDI-1264) records a *truthful* outcome on the
+    failure path: provider 4xx/5xx → ``provider_error``; a render exceeding its
+    window (TimeoutError / asyncio cancellation timeout) → ``timeout``; a
+    closed/broken streamable-HTTP stream → ``teardown_closed_stream``; anything
+    else → ``other``. ``error_category`` is the concrete exception class name
+    for finer post-hoc slicing.
+    """
+    category = type(exc).__name__
+    if _CLOSED_STREAM_ERRORS and isinstance(exc, _CLOSED_STREAM_ERRORS):
+        return "teardown_closed_stream", category
+    if isinstance(exc, TimeoutError):  # builtin (== asyncio.TimeoutError on 3.11+)
+        return "timeout", category
+    name_lower = category.lower()
+    if "timeout" in name_lower:
+        return "timeout", category
+    # httpx.HTTPStatusError and most provider SDK errors carry a 4xx/5xx; treat
+    # any provider-call exception that isn't a timeout as a provider error.
+    if "httpstatus" in name_lower or "http" in name_lower or "apierror" in name_lower:
+        return "provider_error", category
+    # Default: a provider call raised something we don't specifically know —
+    # still most likely a provider failure, but tag it 'other' to stay honest.
+    return "other", category
+
+
+def _record_generation_attempt(
+    *,
+    request_id: str,
+    outcome: str,
+    model: str | None,
+    provider: str | None,
+    brand: str | None,
+    width: int | None,
+    height: int | None,
+    latency_ms: int | None,
+    error_category: str | None = None,
+    error_message: str | None = None,
+    hosted_url: str | None = None,
+    cost_estimate_eur: float | None = None,
+    delivery: str | None = None,
+) -> None:
+    """Write exactly one ledger line for a generation attempt. Best-effort.
+
+    Thin wrapper over :func:`mcp_bildsprache.ledger.build_record` +
+    ``append_record`` so the tool bodies stay thin and a ledger write can never
+    raise into the generation path (CDI-1264 acceptance: ledger failures never
+    break generation).
+    """
+    try:
+        record = _ledger.build_record(
+            request_id=request_id,
+            outcome=outcome,  # type: ignore[arg-type]
+            model=model,
+            provider=provider,
+            brand=brand,
+            width=width,
+            height=height,
+            requested_size=(f"{width}x{height}" if width and height else None),
+            latency_ms=latency_ms,
+            error_category=error_category,
+            error_message=error_message,
+            hosted_url=hosted_url,
+            cost_estimate_eur=cost_estimate_eur,
+            delivery=delivery,  # type: ignore[arg-type]
+        )
+        _ledger.append_record(record)
+    except Exception:  # pragma: no cover — ledger must never break generation
+        logger.debug("ledger record build/append failed", exc_info=True)
+
+
+async def _progress(
+    ctx: Context | None,
+    progress: float,
+    total: float,
+    message: str,
+    *,
+    on_closed_stream: Callable[[], None] | None = None,
+) -> None:
     """Report progress over the MCP channel when a Context is present.
 
     Long generations (native-4K Gemini, OpenAI backoff retries) take 30-60s+
@@ -171,6 +253,12 @@ async def _progress(ctx: Context | None, progress: float, total: float, message:
     are swallowed at debug specifically — they must NOT bubble up and tear the
     session down, because the render is still running and the artifact will be
     written + indexed (recoverable via `list_recent_generations`).
+
+    ``on_closed_stream`` (CDI-1264): an optional callback invoked when — and only
+    when — a closed/broken stream is swallowed. The generation path uses it to
+    flag that delivery was torn down so the outcome ledger can record the render
+    as ``success`` + ``delivery='teardown_closed_stream'`` (truthful: the image
+    succeeded, the caller just never received the notification).
     """
     if ctx is None:
         return
@@ -178,16 +266,24 @@ async def _progress(ctx: Context | None, progress: float, total: float, message:
         await ctx.report_progress(progress=progress, total=total, message=message)
     except _CLOSED_STREAM_ERRORS:  # pragma: no cover — session closed mid-render
         logger.debug("ctx.report_progress: session stream closed; ignoring", exc_info=True)
+        if on_closed_stream is not None:
+            on_closed_stream()
     except Exception:  # pragma: no cover — telemetry must never break generation
         logger.debug("ctx.report_progress failed", exc_info=True)
 
 
-async def _info(ctx: Context | None, message: str) -> None:
+async def _info(
+    ctx: Context | None,
+    message: str,
+    *,
+    on_closed_stream: Callable[[], None] | None = None,
+) -> None:
     """Emit an info-level log over the MCP channel when a Context is present.
 
     Guards the same closed/broken-stream case as :func:`_progress` (CDI-1253):
     a ``ctx.info`` write to a timed-out session must not crash the still-running
-    tool call.
+    tool call. ``on_closed_stream`` mirrors :func:`_progress` for ledger
+    delivery-state tracking (CDI-1264).
     """
     if ctx is None:
         return
@@ -195,6 +291,8 @@ async def _info(ctx: Context | None, message: str) -> None:
         await ctx.info(message)
     except _CLOSED_STREAM_ERRORS:  # pragma: no cover — session closed mid-render
         logger.debug("ctx.info: session stream closed; ignoring", exc_info=True)
+        if on_closed_stream is not None:
+            on_closed_stream()
     except Exception:  # pragma: no cover — telemetry must never break generation
         logger.debug("ctx.info failed", exc_info=True)
 
@@ -612,8 +710,24 @@ async def generate_image(
             "estimated_cost_eur": est_cost,
         }
 
+    # --- Outcome ledger (CDI-1264): one record per ATTEMPT --------------
+    # `request_id` correlates the success/failure line; `_dispatch_t0` starts
+    # the dispatch→result (or dispatch→error) latency clock; `_delivery_state`
+    # flips to teardown if a post-dispatch progress/info write hits a closed
+    # streamable-HTTP stream (the render still succeeds — see _progress).
+    request_id = _ledger.new_request_id()
+    _dispatch_t0 = time.monotonic()
+    _delivery_state: dict[str, str] = {"delivery": "delivered"}
+
+    def _mark_torn_down() -> None:
+        _delivery_state["delivery"] = "teardown_closed_stream"
+
+    def _latency_ms() -> int:
+        return int((time.monotonic() - _dispatch_t0) * 1000)
+
     await _progress(
-        ctx, 2, 5, f"Generating image via {selected_provider} (this can take 30-60s)"
+        ctx, 2, 5, f"Generating image via {selected_provider} (this can take 30-60s)",
+        on_closed_stream=_mark_torn_down,
     )
     try:
         provider_result = await _call_provider(selected_provider, specific_model)
@@ -621,11 +735,45 @@ async def generate_image(
         logger.warning("Provider %s failed: %s — trying fallback", selected_provider, e)
         fallback_provider = fallback_map.get(selected_provider)
         if not fallback_provider:
+            # Terminal failure on the no-fallback raster path. Record exactly
+            # one ledger line on the failure path before re-raising.
+            outcome, category = _classify_generation_error(e)
+            _record_generation_attempt(
+                request_id=request_id,
+                outcome=outcome,
+                model=specific_model or selected_provider,
+                provider=selected_provider,
+                brand=context,
+                width=w,
+                height=h,
+                latency_ms=_latency_ms(),
+                error_category=category,
+                error_message=str(e),
+                cost_estimate_eur=est_cost,
+            )
             raise
         await _info(
-            ctx, f"{selected_provider} failed; falling back to {fallback_provider}"
+            ctx, f"{selected_provider} failed; falling back to {fallback_provider}",
+            on_closed_stream=_mark_torn_down,
         )
-        provider_result = await _call_provider(fallback_provider)
+        try:
+            provider_result = await _call_provider(fallback_provider)
+        except Exception as e2:
+            outcome, category = _classify_generation_error(e2)
+            _record_generation_attempt(
+                request_id=request_id,
+                outcome=outcome,
+                model=fallback_provider,
+                provider=fallback_provider,
+                brand=context,
+                width=w,
+                height=h,
+                latency_ms=_latency_ms(),
+                error_category=category,
+                error_message=str(e2),
+                cost_estimate_eur=est_cost,
+            )
+            raise
         fallback_used = True
         original_model = selected_provider
 
@@ -670,29 +818,54 @@ async def generate_image(
         result["intended_provider"] = original_model
         result["fallback_reason"] = "provider_error"
 
-    # Hosting pipeline: process → store → return hosted URL
-    await _progress(ctx, 3, 5, "Post-processing image (resize, crop, WebP, EXIF)")
-    processed_bytes = process_image(
-        provider_result=provider_result,
-        target_width=w,
-        target_height=h,
-        prompt=enhanced_prompt,
-        brand_context=context,
+    # Hosting pipeline: process → store → return hosted URL. A failure here
+    # (process/store) means the provider succeeded but the artifact was NOT
+    # persisted; record that honestly on the failure path before re-raising.
+    await _progress(
+        ctx, 3, 5, "Post-processing image (resize, crop, WebP, EXIF)",
+        on_closed_stream=_mark_torn_down,
     )
+    try:
+        processed_bytes = process_image(
+            provider_result=provider_result,
+            target_width=w,
+            target_height=h,
+            prompt=enhanced_prompt,
+            brand_context=context,
+        )
 
-    await _progress(ctx, 4, 5, "Storing image and writing provenance sidecar")
-    hosted_url = store_image(
-        image_data=processed_bytes,
-        prompt=enhanced_prompt,
-        width=w,
-        height=h,
-        model=provider_result.model,
-        cost_estimate=provider_result.cost_estimate,
-        brand_context=context,
-        fallback_used=fallback_used,
-        original_model=original_model,
-        attribution=attribution,
-    )
+        await _progress(
+            ctx, 4, 5, "Storing image and writing provenance sidecar",
+            on_closed_stream=_mark_torn_down,
+        )
+        hosted_url = store_image(
+            image_data=processed_bytes,
+            prompt=enhanced_prompt,
+            width=w,
+            height=h,
+            model=provider_result.model,
+            cost_estimate=provider_result.cost_estimate,
+            brand_context=context,
+            fallback_used=fallback_used,
+            original_model=original_model,
+            attribution=attribution,
+        )
+    except Exception as e:
+        outcome, category = _classify_generation_error(e)
+        _record_generation_attempt(
+            request_id=request_id,
+            outcome=outcome,
+            model=provider_result.model,
+            provider=attribution.get("provider"),
+            brand=context,
+            width=w,
+            height=h,
+            latency_ms=_latency_ms(),
+            error_category=category,
+            error_message=str(e),
+            cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
+        )
+        raise
     result["hosted_url"] = hosted_url
 
     # Store and return raw (unprocessed) provider output if requested
@@ -728,7 +901,25 @@ async def generate_image(
         fallback_used,
     )
 
-    await _progress(ctx, 5, 5, "Done")
+    await _progress(ctx, 5, 5, "Done", on_closed_stream=_mark_torn_down)
+
+    # CDI-1264 — success ledger line. The render succeeded and the artifact is
+    # stored/indexed; `delivery` captures whether the caller actually received
+    # the response or the streamable-HTTP session was torn down mid-render
+    # (image is recoverable via list_recent_generations either way).
+    _record_generation_attempt(
+        request_id=request_id,
+        outcome="success",
+        model=provider_result.model,
+        provider=attribution.get("provider"),
+        brand=context,
+        width=w,
+        height=h,
+        latency_ms=_latency_ms(),
+        hosted_url=hosted_url,
+        cost_estimate_eur=(cost_block or {}).get("amount_eur"),
+        delivery=_delivery_state["delivery"],
+    )
     return result
 
 
@@ -928,8 +1119,21 @@ async def generate_diagram(
             "estimated_cost_eur": est_cost,
         }
 
+    # Outcome ledger (CDI-1264) — one record per diagram ATTEMPT, mirroring
+    # generate_image. Diagrams always carry the casey brand context.
+    request_id = _ledger.new_request_id()
+    _dispatch_t0 = time.monotonic()
+    _delivery_state: dict[str, str] = {"delivery": "delivered"}
+
+    def _mark_torn_down() -> None:
+        _delivery_state["delivery"] = "teardown_closed_stream"
+
+    def _latency_ms() -> int:
+        return int((time.monotonic() - _dispatch_t0) * 1000)
+
     await _progress(
-        ctx, 2, 4, f"Rendering diagram via {selected_provider} (this can take 30-60s)"
+        ctx, 2, 4, f"Rendering diagram via {selected_provider} (this can take 30-60s)",
+        on_closed_stream=_mark_torn_down,
     )
     try:
         provider_result = await _call_provider(selected_provider, specific_model)
@@ -941,11 +1145,43 @@ async def generate_diagram(
         )
         fallback_provider = FALLBACKS.get(selected_provider)
         if not fallback_provider:
+            outcome, category = _classify_generation_error(e)
+            _record_generation_attempt(
+                request_id=request_id,
+                outcome=outcome,
+                model=specific_model or selected_provider,
+                provider=selected_provider,
+                brand="casey",
+                width=w,
+                height=h,
+                latency_ms=_latency_ms(),
+                error_category=category,
+                error_message=str(e),
+                cost_estimate_eur=est_cost,
+            )
             raise
         await _info(
-            ctx, f"{selected_provider} failed; falling back to {fallback_provider}"
+            ctx, f"{selected_provider} failed; falling back to {fallback_provider}",
+            on_closed_stream=_mark_torn_down,
         )
-        provider_result = await _call_provider(fallback_provider)
+        try:
+            provider_result = await _call_provider(fallback_provider)
+        except Exception as e2:
+            outcome, category = _classify_generation_error(e2)
+            _record_generation_attempt(
+                request_id=request_id,
+                outcome=outcome,
+                model=fallback_provider,
+                provider=fallback_provider,
+                brand="casey",
+                width=w,
+                height=h,
+                latency_ms=_latency_ms(),
+                error_category=category,
+                error_message=str(e2),
+                cost_estimate_eur=est_cost,
+            )
+            raise
         fallback_used = True
         original_provider = selected_provider
 
@@ -978,27 +1214,47 @@ async def generate_diagram(
         result["intended_provider"] = original_provider
         result["fallback_reason"] = "provider_error"
 
-    await _progress(ctx, 3, 4, "Post-processing and storing diagram")
-    processed_bytes = process_image(
-        provider_result=provider_result,
-        target_width=w,
-        target_height=h,
-        prompt=enhanced_prompt,
-        brand_context="casey",
+    await _progress(
+        ctx, 3, 4, "Post-processing and storing diagram",
+        on_closed_stream=_mark_torn_down,
     )
+    try:
+        processed_bytes = process_image(
+            provider_result=provider_result,
+            target_width=w,
+            target_height=h,
+            prompt=enhanced_prompt,
+            brand_context="casey",
+        )
 
-    hosted_url = store_image(
-        image_data=processed_bytes,
-        prompt=enhanced_prompt,
-        width=w,
-        height=h,
-        model=provider_result.model,
-        cost_estimate=provider_result.cost_estimate,
-        brand_context="casey",
-        fallback_used=fallback_used,
-        original_model=original_provider,
-        attribution=attribution,
-    )
+        hosted_url = store_image(
+            image_data=processed_bytes,
+            prompt=enhanced_prompt,
+            width=w,
+            height=h,
+            model=provider_result.model,
+            cost_estimate=provider_result.cost_estimate,
+            brand_context="casey",
+            fallback_used=fallback_used,
+            original_model=original_provider,
+            attribution=attribution,
+        )
+    except Exception as e:
+        outcome, category = _classify_generation_error(e)
+        _record_generation_attempt(
+            request_id=request_id,
+            outcome=outcome,
+            model=provider_result.model,
+            provider=attribution.get("provider"),
+            brand="casey",
+            width=w,
+            height=h,
+            latency_ms=_latency_ms(),
+            error_category=category,
+            error_message=str(e),
+            cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
+        )
+        raise
     result["hosted_url"] = hosted_url
     result["response_mode"] = "url"
 
@@ -1018,7 +1274,22 @@ async def generate_diagram(
         fallback_used,
     )
 
-    await _progress(ctx, 4, 4, "Done")
+    await _progress(ctx, 4, 4, "Done", on_closed_stream=_mark_torn_down)
+
+    # CDI-1264 — success ledger line for the diagram attempt.
+    _record_generation_attempt(
+        request_id=request_id,
+        outcome="success",
+        model=provider_result.model,
+        provider=attribution.get("provider"),
+        brand="casey",
+        width=w,
+        height=h,
+        latency_ms=_latency_ms(),
+        hosted_url=hosted_url,
+        cost_estimate_eur=(cost_block or {}).get("amount_eur"),
+        delivery=_delivery_state["delivery"],
+    )
     return result
 
 
@@ -1234,6 +1505,83 @@ async def list_recent_generations(
         "offset": effective_offset,
         "brand": brand,
     }
+
+
+@mcp.tool(
+    annotations={
+        "title": "Generation Outcome Stats",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+async def generation_stats(
+    days: int | None = 30,
+    since: str | None = None,
+    limit: int | None = None,
+) -> GenerationStatsResult:
+    """[image] Per-model success/failure stats from the generation outcome ledger.
+
+    Reads the durable, append-only outcome ledger (CDI-1264) — one record per
+    generation ATTEMPT, written on BOTH the success and failure paths — and
+    reports attempts / successes / failures and success% grouped by model over a
+    time window. Unlike ``list_recent_generations`` (which only sees stored
+    *successes*), this surfaces failures (provider errors, timeouts) too, so the
+    attempts-vs-model-vs-outcome picture is measurable over time and survives a
+    container restart.
+
+    Reads only local JSONL — NO provider call, NO cost. An empty ledger or a
+    window with no records returns clean zeros (``totals.attempts == 0``), never
+    an error.
+
+    Window resolution: an explicit ``since`` wins; otherwise ``days`` (default
+    30) bounds it to ``now - days``; pass ``days=None`` (and no ``since``) for
+    all-time. The ledger is tailed newest-first and capped, so even a very large
+    ledger answers in bounded memory.
+
+    Outcome vocabulary: ``success`` | ``provider_error`` | ``timeout`` |
+    ``teardown_closed_stream`` | ``other``. A torn-down-delivery render is still
+    a generation ``success`` (the image was produced + stored) — the
+    succeeded-but-undelivered count is surfaced separately under
+    ``totals.teardown_closed_stream``.
+
+    Args:
+        days: Look-back window in days (default 30). Ignored when ``since`` is
+              given. Pass ``None`` (with no ``since``) for the full ledger.
+        since: Explicit lower bound as an ISO-8601 timestamp (e.g.
+               ``'2026-06-01T00:00:00Z'``). Overrides ``days`` when set.
+        limit: Cap on how many of the most-recent records are scanned. Defaults
+               to no caller cap (still hard-capped internally for safety).
+
+    Returns:
+        ``window`` (the applied bounds), ``totals`` (attempts/successes/failures/
+        success_rate/success_pct + delivered vs teardown_closed_stream), and
+        ``by_model`` (one row per model with the same counts plus an ``outcomes``
+        breakdown).
+    """
+    since_dt = None
+    if since:
+        since_dt = _ledger._parse_ts(since)
+        if since_dt is None:
+            return {
+                "error": {
+                    "code": "INVALID_SINCE",
+                    "message": (
+                        f"Invalid `since` timestamp {since!r}. Use ISO-8601, "
+                        "e.g. '2026-06-01T00:00:00Z'."
+                    ),
+                },
+            }
+
+    # An explicit `since` wins; otherwise fall back to the `days` window. When
+    # `since` is provided we do NOT also apply `days`.
+    effective_days = None if since_dt is not None else days
+
+    return _ledger.compute_stats(
+        since=since_dt,
+        days=effective_days,
+        limit=limit,
+    )
 
 
 @mcp.tool(
@@ -1552,8 +1900,36 @@ def _build_gallery_mount(gallery_app):
     return Mount("/gallery", app=gallery_app)
 
 
+def _run_backfill() -> int:
+    """One-shot, idempotent ledger backfill from existing gallery sidecars.
+
+    Seeds one ``success`` record per gallery sidecar so the outcome ledger
+    (CDI-1264) isn't empty on day one. Idempotent — re-running skips records
+    already seeded (keyed by ``backfill:<relative_path>``). NOT run on startup;
+    invoke explicitly via ``python -m mcp_bildsprache --backfill``.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    summary = _ledger.backfill_from_gallery()
+    logger.info(
+        "Ledger backfill complete: scanned=%d seeded=%d skipped=%d -> %s",
+        summary["scanned"],
+        summary["seeded"],
+        summary["skipped"],
+        settings.resolved_ledger_path,
+    )
+    return 0
+
+
 def main() -> None:
     """Entry point for the mcp-bildsprache server."""
+    import sys
+
+    if "--backfill" in sys.argv[1:]:
+        raise SystemExit(_run_backfill())
+
     if settings.transport == "http":
         # stateless_http=True → eliminates orphaned SSE sessions after CF
         # kills idle connections. See openspec mcp-stateless-transport.
