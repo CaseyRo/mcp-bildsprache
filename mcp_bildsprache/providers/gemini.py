@@ -1,4 +1,14 @@
-"""Gemini (Nano Banana 2) image generation provider."""
+"""Gemini (Nano Banana) image generation provider.
+
+Two active models (model lineup refresh, CDI-1264):
+
+* ``gemini-3.1-flash-image-preview`` (Nano Banana 2) — fast default, the
+  raster fallback when OpenAI is unavailable.
+* ``gemini-3-pro-image-preview`` (Nano Banana Pro) — top editing/control +
+  4K brand graphics; the diagram default. Higher quality, slower, pricier.
+
+``gemini-2.5-flash-image`` was dropped (superseded by Nano Banana 2).
+"""
 
 from __future__ import annotations
 
@@ -17,9 +27,16 @@ logger = logging.getLogger(__name__)
 
 # Ordered by preference — first available model wins.
 # Update this list when Google releases new image generation models.
+#
+# Nano Banana 2 (flash) leads the default fallback list: it's fast enough to
+# fit the MCP portal budget and is the OpenAI-unavailable raster fallback.
+# Nano Banana Pro (gemini-3-pro-image-preview) is the higher-quality 4K model
+# — the diagram default — selected via the ``model`` override (see
+# ``generate_gemini``). It still trails flash in the generic fallback list so
+# a Pro failure degrades to the faster model.
 GEMINI_MODELS = [
-    "gemini-3.1-flash-image-preview",  # Nano Banana 2 (best, preview)
-    "gemini-2.5-flash-image",           # Stable fallback
+    "gemini-3.1-flash-image-preview",  # Nano Banana 2 (fast default)
+    "gemini-3-pro-image-preview",       # Nano Banana Pro (top quality, 4K)
 ]
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -32,7 +49,9 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 # fits inside the portal budget (44s + 14s ≈ 58s < 60s).
 _MODEL_TIMEOUTS: dict[str, float] = {
     "gemini-3.1-flash-image-preview": 44.0,
-    "gemini-2.5-flash-image": 14.0,
+    # Nano Banana Pro is slower (4K-capable). When it leads (diagram path), it
+    # gets the larger share of the budget; flash trails it as the fast fallback.
+    "gemini-3-pro-image-preview": 44.0,
 }
 _DEFAULT_TIMEOUT = 30.0
 
@@ -70,17 +89,28 @@ def _closest_aspect_ratio(width: int, height: int) -> str:
     )
 
 
-def _image_size_for(width: int, height: int) -> str:
+def _image_size_for(width: int, height: int, model: str = "") -> str:
     """Pick the smallest Gemini imageSize tier whose long edge covers the target.
 
-    Only the 3.x models honour imageSize (2.5-flash is fixed ~1024px). We cap
-    at 2K: it carries the same output-token cost as 1K on 3.1 (≈1120 tokens)
-    yet yields far more pixels, while 4K (≈2520 tokens) is what blows the
-    request budget. The pipeline downsizes from 2K to the caller's dimensions
-    (sharp) instead of upscaling (soft). 1K's long edge is ~1264px, so any
-    target wider/taller than that uses 2K.
+    Only the 3.x models honour imageSize. We cap the flash model at 2K: it
+    carries the same output-token cost as 1K on 3.1 (≈1120 tokens) yet yields
+    far more pixels, while 4K (≈2520 tokens) is what blows the flash request
+    budget. The pipeline downsizes from 2K to the caller's dimensions (sharp)
+    instead of upscaling (soft). 1K's long edge is ~1264px, so any target
+    wider/taller than that uses 2K.
+
+    Nano Banana Pro (``gemini-3-pro-image-preview``) is the 4K brand-graphics
+    model (model lineup refresh, CDI-1264): for targets beyond ~2K it is
+    allowed to render at 4K (its higher per-image token budget is the whole
+    point of choosing it). It carries a longer timeout to suit (see
+    ``_MODEL_TIMEOUTS``).
     """
-    return "1K" if max(width, height) <= 1264 else "2K"
+    longest = max(width, height)
+    if longest <= 1264:
+        return "1K"
+    if model.startswith("gemini-3-pro") and longest > 2048:
+        return "4K"
+    return "2K"
 
 # Mapping of Pillow "format" strings to the mime types Gemini's inlineData
 # parts accept. Anything outside this set → ValueError.
@@ -116,11 +146,18 @@ async def generate_gemini(
     width: int = 1200,
     height: int = 1200,
     reference_images: list[bytes] | None = None,
+    *,
+    model: str | None = None,
 ) -> ProviderResult:
     """Generate an image using Gemini's multimodal generation.
 
-    Tries Nano Banana 2 first, falls back to gemini-2.5-flash-image if unavailable.
-    Returns a ProviderResult with decoded image bytes.
+    By default tries Nano Banana 2 (``gemini-3.1-flash-image-preview``) first,
+    then Nano Banana Pro (``gemini-3-pro-image-preview``) if it fails. Pass
+    ``model`` to put a specific model at the front of the attempt order — the
+    diagram path uses this to prefer Nano Banana Pro (top editing/control + 4K)
+    while keeping the remaining models as fallbacks. An unknown ``model`` is
+    attempted as-is, then the standard list. Returns a ProviderResult with
+    decoded image bytes.
 
     If ``reference_images`` is provided and non-empty, each blob is appended
     as an additional ``inlineData`` part to ``contents[0].parts`` alongside
@@ -138,8 +175,14 @@ async def generate_gemini(
     else:
         probed = []
 
+    # Build the attempt order: preferred model first (deduped), then the
+    # standard fallback list.
+    attempt_order: list[str] = list(GEMINI_MODELS)
+    if model:
+        attempt_order = [model] + [m for m in GEMINI_MODELS if m != model]
+
     last_error = None
-    for model in GEMINI_MODELS:
+    for model in attempt_order:
         timeout = _MODEL_TIMEOUTS.get(model, _DEFAULT_TIMEOUT)
         try:
             return await _generate_with_model(
@@ -200,7 +243,7 @@ async def _generate_with_model(
         "aspectRatio": _closest_aspect_ratio(width, height),
     }
     if model.startswith("gemini-3"):
-        image_config["imageSize"] = _image_size_for(width, height)
+        image_config["imageSize"] = _image_size_for(width, height, model)
 
     payload = {
         "contents": [{"parts": parts}],

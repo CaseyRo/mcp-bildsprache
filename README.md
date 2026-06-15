@@ -1,6 +1,6 @@
 # mcp-bildsprache
 
-MCP server for brand-aware image generation. Routes to Gemini, FLUX.2 Pro, or Recraft V4 based on brand context and content type.
+MCP server for brand-aware image generation. Active providers: OpenAI (gpt-image-2 + gpt-image-1.5) for raster, Google Gemini (Nano Banana Pro / Nano Banana 2) for diagrams and the raster fallback. FLUX.2 and Recraft V4.1 remain in-tree but disabled at the dispatcher (re-enabling is a one-PR swap).
 
 ## Quick Start
 
@@ -16,20 +16,23 @@ docker compose up --build
 ## MCP Tools
 
 - `generate_image` — Full image generation with brand preset injection.
-  Default raster path: OpenAI gpt-image-2. Optional `register: 'personal' | 'professional'`
-  for the casey brand (May 2026 brand collapse). Optional `reference_images: list[bytes]`
-  forwards reference images to OpenAI gpt-image-2 (or auto-resolves from the brand's
-  identity pack when `context` is set). Optional `include_dogs: bool | None` overrides
-  the dog-slot heuristic for casey (True = force-include Sien + Fimme, False = suppress,
-  None = use manifest rules).
+  Default raster path: OpenAI gpt-image-2; `model_hint='gpt-image-1.5'` selects the
+  quality sibling GPT Image 1.5 (high) using the same image params (size/quality tiers).
+  Optional `register: 'personal' | 'professional'` for the casey brand (May 2026 brand
+  collapse). Optional `reference_images: list[bytes]` forwards reference images to OpenAI
+  (or auto-resolves from the brand's identity pack when `context` is set). Optional
+  `include_dogs: bool | None` overrides the dog-slot heuristic for casey (True =
+  force-include Sien + Fimme, False = suppress, None = use manifest rules).
 - `generate_diagram` — Flow / sequence / state diagrams via Gemini Nano Banana Pro
-  (default) or OpenAI gpt-image-2 (`model_hint='openai'`). Accepts free-text `prompt`
-  OR Mermaid `mermaid` source (parsed into a structured render brief). Brand palette
-  + UML conventions injected automatically. Format scope: `flow`, `sequence`, `state`.
+  (`gemini-3-pro-image-preview`, default — top editing/control + 4K brand graphics) or
+  OpenAI gpt-image-2 (`model_hint='openai'`). Accepts free-text `prompt` OR Mermaid
+  `mermaid` source (parsed into a structured render brief). Brand palette + UML
+  conventions injected automatically. Format scope: `flow`, `sequence`, `state`.
 - `generate_prompt` — Prompt engineering only (no image generation).
-- `list_models` — Active providers (`openai`, `gemini`) plus a `disabled_providers`
-  array (`bfl`, `recraft` — modules in-tree but disabled at the dispatcher per the
-  May 2026 brand collapse). Also reports `identity_packs: {brand: bool}` and
+- `list_models` — Active providers (`openai`: gpt-image-2 + gpt-image-1.5 + draft;
+  `gemini`: Nano Banana Pro + Nano Banana 2) plus a `disabled_providers` array
+  (`bfl`, `recraft` — modules in-tree but disabled at the dispatcher per the May 2026
+  brand collapse). Also reports `identity_packs: {brand: bool}` and
   `diagram_capable: [...]` / `diagram_formats: [...]`.
 - `get_visual_presets` — Brand visual presets for each context. Active brands:
   `casey` (with `personal` and `professional` register overlays), `yorizon`. Per-brand

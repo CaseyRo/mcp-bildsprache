@@ -485,6 +485,17 @@ class TestOtherTools:
         assert result["diagram_capable"] == ["openai", "gemini"]
         assert set(result["diagram_formats"]) == {"flow", "sequence", "state"}
 
+        # Model lineup refresh (CDI-1264): the openai provider advertises
+        # gpt-image-1.5 (high) alongside gpt-image-2; gemini advertises Nano
+        # Banana Pro + Nano Banana 2 and NO longer gemini-2.5-flash-image.
+        by_id = {m["id"]: m for m in providers}
+        assert "gpt-image-1.5" in by_id["openai"]["models"]
+        assert "gpt-image-2" in by_id["openai"]["models"]
+        assert "gemini-3-pro-image-preview" in by_id["gemini"]["models"]
+        assert "gemini-3.1-flash-image-preview" in by_id["gemini"]["models"]
+        assert "gemini-2.5-flash-image" not in by_id["gemini"]["models"]
+        assert by_id["gemini"]["default"] == "gemini-3-pro-image-preview"
+
     @pytest.mark.anyio
     async def test_get_visual_presets_returns_presets(self):
         from mcp_bildsprache.server import get_visual_presets
@@ -988,6 +999,9 @@ class TestGenerateDiagramTool:
         assert result["brand_context"] == "casey"
         assert "hosted_url" in result
         assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+        # Model lineup refresh (CDI-1264): the diagram default prefers Nano
+        # Banana Pro (gemini-3-pro-image-preview), passed as the model kwarg.
+        assert mock_provider.await_args.kwargs.get("model") == "gemini-3-pro-image-preview"
 
     @pytest.mark.anyio
     async def test_mermaid_flow_input(self, tmp_path: Path, mock_provider):

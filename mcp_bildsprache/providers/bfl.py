@@ -28,12 +28,10 @@ FLUX_MODELS = {
         "cost": "$0.03",
         "snap": 16,
         "max_mp": 4.0,
-    },
-    "flux-kontext-pro": {
-        "url": "https://api.bfl.ai/v1/flux-kontext-pro",
-        "cost": "$0.04",
-        "snap": 32,
-        "max_mp": 1.0,
+        # flux-2-pro accepts reference bytes via the image_prompt field; it is
+        # the reference-capable model after flux-kontext-pro was dropped
+        # (model lineup refresh, CDI-1264).
+        "reference_max_mp": 1.0,
     },
     "flux-pro-1.1": {
         "url": "https://api.bfl.ai/v1/flux-pro-1.1",
@@ -46,8 +44,10 @@ FLUX_MODELS = {
 DEFAULT_MODEL = "flux-2-max"
 FALLBACK_CHAIN = ["flux-2-max", "flux-2-pro", "flux-pro-1.1"]
 # When reference_images are present, we skip flux-2-max entirely (text-only
-# model) and prefer reference-capable endpoints.
-REFERENCE_FALLBACK_CHAIN = ["flux-kontext-pro", "flux-2-pro"]
+# model) and prefer reference-capable endpoints. flux-kontext-pro was dropped
+# (model lineup refresh, CDI-1264); flux-2-pro (image_prompt) is now the
+# reference-capable model.
+REFERENCE_FALLBACK_CHAIN = ["flux-2-pro"]
 
 BFL_RESULT_URL = "https://api.bfl.ai/v1/get_result"
 
@@ -72,7 +72,7 @@ def _collage(images: list[bytes]) -> bytes:
 
     Each source is resized to a common height while preserving its aspect
     ratio, then pasted left-to-right. If the resulting canvas would exceed
-    the smallest FLUX reference-model max_mp (``flux-kontext-pro`` at
+    the FLUX reference-model max_mp budget (``flux-2-pro`` reference path at
     1.0 MP), the whole collage is scaled down proportionally.
     """
     if not images:
@@ -96,9 +96,9 @@ def _collage(images: list[bytes]) -> bytes:
 
         total_w = sum(p.width for p in pieces)
 
-        # Downscale the whole collage if it exceeds the tightest FLUX
-        # reference-model max_mp budget (flux-kontext-pro = 1.0 MP).
-        max_mp = FLUX_MODELS["flux-kontext-pro"]["max_mp"]
+        # Downscale the whole collage if it exceeds the FLUX reference-model
+        # max_mp budget (flux-2-pro reference path = 1.0 MP).
+        max_mp = FLUX_MODELS["flux-2-pro"]["reference_max_mp"]
         mp = (total_w * target_h) / 1_000_000
         if mp > max_mp:
             scale = (max_mp / mp) ** 0.5
@@ -144,10 +144,11 @@ async def generate_bfl(
     Downloads the image and returns a ProviderResult with raw bytes.
 
     When ``reference_images`` is non-empty, routes to a reference-capable
-    FLUX model. The fallback chain becomes ``flux-kontext-pro → flux-2-pro``
-    (the latter uses the ``image_prompt`` field). ``flux-2-max`` is never
-    attempted because it is text-only. Multiple references are combined
-    into a single-input collage before submission.
+    FLUX model. After flux-kontext-pro was dropped (model lineup refresh,
+    CDI-1264) the reference path is ``flux-2-pro`` (which uses the
+    ``image_prompt`` field). ``flux-2-max`` is never attempted because it is
+    text-only. Multiple references are combined into a single-input collage
+    before submission.
     """
     api_key = settings.bfl_api_key.get_secret_value()
     if not api_key:
@@ -216,13 +217,12 @@ async def _generate_with_model(
     # Attach reference bytes using the field name each endpoint expects.
     if reference_blob is not None:
         encoded = base64.b64encode(reference_blob).decode("ascii")
-        if model_id == "flux-kontext-pro":
-            payload["input_image"] = encoded
-        elif model_id == "flux-2-pro":
+        if model_id == "flux-2-pro":
             payload["image_prompt"] = encoded
         # Other models (flux-2-max, flux-pro-1.1) do not accept references;
         # we silently omit the field rather than fail so that an explicit
-        # model_hint still yields *some* output.
+        # model_hint still yields *some* output. (flux-kontext-pro, which used
+        # input_image, was dropped — model lineup refresh, CDI-1264.)
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         submit_response = await client.post(model_info["url"], json=payload, headers=headers)

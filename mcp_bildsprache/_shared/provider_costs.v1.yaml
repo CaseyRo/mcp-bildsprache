@@ -52,10 +52,7 @@ bfl:
     mode: per-image
     kind: image
     usd: 0.03
-  flux-kontext-pro:                   # reference-locked single-image editing
-    mode: per-image
-    kind: image
-    usd: 0.04
+  # flux-kontext-pro DROPPED (model lineup refresh, CDI-1264): superseded.
   flux-pro-1.1:                       # legacy fallback — retained for now
     mode: per-image
     kind: image
@@ -93,7 +90,8 @@ gemini:
       "4096": 2520         # ~$0.151
     batch_discount: 0.50
     watermark: synthid
-  # Nano Banana Pro — higher quality, more expensive; use for complex multi-reference / grounded generation
+  # Nano Banana Pro — top editing/control + 4K brand graphics; complex
+  # multi-reference / grounded generation (model lineup refresh, CDI-1264).
   gemini-3-pro-image-preview:
     mode: per-token-usage
     kind: image
@@ -105,26 +103,28 @@ gemini:
       "4096": 2000         # ~$0.240
     batch_discount: 0.50
     watermark: synthid
-  # Older flat-rate model, kept for high-volume/low-latency (draft tier)
-  gemini-2.5-flash-image:
-    mode: per-image
-    kind: image
-    usd: 0.039
-    usd_batch: 0.0195      # 50% batch discount applied
-    watermark: synthid
+  # gemini-2.5-flash-image DROPPED (model lineup refresh, CDI-1264):
+  # superseded by gemini-3.1-flash-image-preview (Nano Banana 2).
 
 recraft:
-  # V4 is the 2026 default. V3 kept for text-in-image + artistic control. V2 for exclusive styles.
-  recraftv4:
+  # V4.1 is the 2026 default (model lineup refresh, CDI-1264 — API slug
+  # recraftv4_1 / recraftv4_1_vector). V3 kept for text-in-image + artistic
+  # control. V2 for exclusive styles. V4.1 same-tier pricing as V4.
+  recraftv4_1:
     mode: per-image
     kind: image
     usd_raster: 0.04
     usd_vector: 0.08
-  recraftv4-pro:                      # print-ready / large-format
+  recraftv4_1_pro:                    # print-ready / large-format
     mode: per-image
     kind: image
     usd_raster: 0.25
     usd_vector: 0.30
+  recraftv4:                          # prior default, retained for back-compat
+    mode: per-image
+    kind: image
+    usd_raster: 0.04
+    usd_vector: 0.08
   recraftv3:
     mode: per-image
     kind: image
