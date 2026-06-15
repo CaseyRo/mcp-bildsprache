@@ -153,6 +153,52 @@ class GeneratePromptResult(BaseModel):
     )
 
 
+class GetImageResult(BaseModel):
+    """Structured result of :func:`get_image_result` (CDI-1266 async poll).
+
+    ``status`` is the discriminant:
+
+    * ``"done"``      — the render completed; the full generate_image/
+      generate_diagram result is spread in at the top level (``hosted_url``,
+      ``model``, ``cost_estimate``, ``ai_attribution``, ...), recoverable from the
+      in-process registry or — across restarts — the durable CDI-1264 ledger.
+    * ``"pending"``   — still rendering; poll again (optionally with
+      ``wait_seconds`` to long-poll).
+    * ``"error"``     — the render failed; ``error`` carries the message.
+    * ``"not_found"`` — the ``job_id`` is unknown to both the registry and the
+      ledger (never dispatched, or evicted before completion with no ledger line).
+
+    ``extra="allow"`` lets the spread-in success fields pass through verbatim.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str = Field(description="The polled job id (== the generation request_id).")
+    status: str = Field(description="One of: pending | done | error | not_found.")
+    hosted_url: Optional[str] = Field(
+        default=None, description="Public WebP URL — present when status == 'done'."
+    )
+    model: Optional[str] = Field(default=None, description="Provider model id, when known.")
+    brand_context: Optional[str] = Field(default=None, description="Brand context, when known.")
+    dimensions: Optional[str] = Field(default=None, description="Image dimensions as 'WxH', when known.")
+    latency_ms: Optional[int] = Field(
+        default=None, description="Dispatch→completion latency in ms (done/error)."
+    )
+    error: Optional[Any] = Field(
+        default=None, description="Error message string when status == 'error'."
+    )
+    error_category: Optional[str] = Field(
+        default=None, description="Exception class name when status == 'error'."
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="Where the result was resolved from: 'registry' | 'ledger' (durable fallback).",
+    )
+    ai_attribution: Optional[dict[str, Any]] = Field(
+        default=None, description="ai_attribution payload, spread in when status == 'done'."
+    )
+
+
 class RecentGeneration(BaseModel):
     """One previously generated artifact surfaced by
     :func:`list_recent_generations`.

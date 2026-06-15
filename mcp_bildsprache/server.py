@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from fastmcp import Context, FastMCP
 from mcp.types import Icon
@@ -47,11 +48,13 @@ from mcp_bildsprache.models import (
     GenerateImageResult,
     GeneratePromptResult,
     GenerationStatsResult,
+    GetImageResult,
     ModelsResult,
     RecentGenerationsResult,
     VisualPresetsResult,
 )
 from mcp_bildsprache import ledger as _ledger
+from mcp_bildsprache import jobs as _jobs
 from mcp_bildsprache.types import (
     IdentityPack,
     ProviderResult,
@@ -352,6 +355,514 @@ async def _confirm_cost(
     return True
 
 
+# --- Async dispatch+poll (CDI-1266) -------------------------------------
+#
+# The render bodies for generate_image / generate_diagram are extracted into
+# the module-level coroutines below so they can run DETACHED from the request
+# scope (see jobs.spawn_detached). This is the core of CDI-1266: the render
+# must keep running after the dispatching tool returns its job handle, because
+# the Cloudflare-managed MCP portal severs the request at ~60s but the render
+# takes 50-80s.
+#
+# These helpers take NO Context — a detached task must not write progress/log
+# notifications to a stream that may already be torn down. They own their own
+# ledger write (success AND failure) so the CDI-1264 ledger still fires on the
+# async path, and they update the in-process job registry on completion so a
+# poll (get_image_result) or the inline-wait can pick up the result.
+
+
+def _render_clock() -> Callable[[], int]:
+    """A fresh dispatch→outcome latency clock (ms)."""
+    t0 = time.monotonic()
+    return lambda: int((time.monotonic() - t0) * 1000)
+
+
+async def _render_image_job(
+    *,
+    job_id: str,
+    selected_provider: str,
+    specific_model: str | None,
+    enhanced_prompt: str,
+    prompt: str,
+    w: int,
+    h: int,
+    has_refs: bool,
+    refs_bytes: list[bytes],
+    draft: bool,
+    raw: bool,
+    context: str | None,
+    platform: str | None,
+    used_identity_pack: bool,
+    resolved_slot_names: list[str],
+    include_dogs: bool | None,
+    est_cost: float | None,
+    fallback_map: dict[str, str | None],
+) -> dict[str, Any]:
+    """Run the raster render+store pipeline and return the result dict.
+
+    Detached-task contract (CDI-1266): no Context, no progress notifications.
+    Writes exactly one CDI-1264 ledger line (success OR failure) and updates the
+    job registry. Re-raises on terminal failure AFTER recording it, so the
+    inline-waiter (if any) sees the same exception the synchronous path raised.
+    """
+    registry = _jobs.get_registry()
+    latency_ms = _render_clock()
+
+    async def _call_provider(provider_key: str, model_id: str | None = None) -> ProviderResult:
+        provider_fn = PROVIDERS[provider_key]
+        kwargs: dict = {}
+        if has_refs:
+            kwargs["reference_images"] = refs_bytes
+        if provider_key == "openai":
+            kwargs["draft"] = draft
+            if model_id and model_id.startswith("gpt-image"):
+                kwargs["model"] = model_id
+            return await provider_fn(enhanced_prompt, w, h, **kwargs)
+        if provider_key == "flux" and model_id:
+            return await provider_fn(enhanced_prompt, w, h, model=model_id, **kwargs)
+        return await provider_fn(enhanced_prompt, w, h, **kwargs)
+
+    fallback_used = False
+    original_model = None
+
+    try:
+        provider_result = await _call_provider(selected_provider, specific_model)
+    except Exception as e:
+        logger.warning("Provider %s failed: %s — trying fallback", selected_provider, e)
+        fallback_provider = fallback_map.get(selected_provider)
+        if not fallback_provider:
+            outcome, category = _classify_generation_error(e)
+            _record_generation_attempt(
+                request_id=job_id,
+                outcome=outcome,
+                model=specific_model or selected_provider,
+                provider=selected_provider,
+                brand=context,
+                width=w,
+                height=h,
+                latency_ms=latency_ms(),
+                error_category=category,
+                error_message=str(e),
+                cost_estimate_eur=est_cost,
+            )
+            registry.mark_error(job_id, error=str(e), error_category=category)
+            raise
+        try:
+            provider_result = await _call_provider(fallback_provider)
+        except Exception as e2:
+            outcome, category = _classify_generation_error(e2)
+            _record_generation_attempt(
+                request_id=job_id,
+                outcome=outcome,
+                model=fallback_provider,
+                provider=fallback_provider,
+                brand=context,
+                width=w,
+                height=h,
+                latency_ms=latency_ms(),
+                error_category=category,
+                error_message=str(e2),
+                cost_estimate_eur=est_cost,
+            )
+            registry.mark_error(job_id, error=str(e2), error_category=category)
+            raise
+        fallback_used = True
+        original_model = selected_provider
+
+    if used_identity_pack:
+        logger.info(
+            "identity_resolved brand=%s slots=%s provider=%s has_include_dogs_override=%s",
+            context,
+            resolved_slot_names,
+            provider_result.model,
+            include_dogs is not None,
+        )
+
+    attribution = build_attribution(
+        provider_result=provider_result,
+        prompt_anchor=prompt,
+        effective_prompt=enhanced_prompt,
+        brand_context=context,
+        params={
+            "platform": platform,
+            "dimensions": f"{w}x{h}",
+        },
+    )
+
+    result: dict = {
+        "model": provider_result.model,
+        "cost_estimate": format_legacy_cost_estimate(attribution),
+        "brand_context": context,
+        "platform": platform,
+        "dimensions": f"{w}x{h}",
+        "ai_attribution": attribution,
+    }
+    if fallback_used:
+        result["fallback_used"] = True
+        result["intended_provider"] = original_model
+        result["fallback_reason"] = "provider_error"
+
+    try:
+        processed_bytes = process_image(
+            provider_result=provider_result,
+            target_width=w,
+            target_height=h,
+            prompt=enhanced_prompt,
+            brand_context=context,
+        )
+        hosted_url = store_image(
+            image_data=processed_bytes,
+            prompt=enhanced_prompt,
+            width=w,
+            height=h,
+            model=provider_result.model,
+            cost_estimate=provider_result.cost_estimate,
+            brand_context=context,
+            fallback_used=fallback_used,
+            original_model=original_model,
+            attribution=attribution,
+        )
+    except Exception as e:
+        outcome, category = _classify_generation_error(e)
+        _record_generation_attempt(
+            request_id=job_id,
+            outcome=outcome,
+            model=provider_result.model,
+            provider=attribution.get("provider"),
+            brand=context,
+            width=w,
+            height=h,
+            latency_ms=latency_ms(),
+            error_category=category,
+            error_message=str(e),
+            cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
+        )
+        registry.mark_error(job_id, error=str(e), error_category=category)
+        raise
+    result["hosted_url"] = hosted_url
+
+    if raw:
+        try:
+            raw_url = store_raw_image(
+                image_data=provider_result.image_data,
+                mime_type=provider_result.mime_type,
+                processed_file_path=result["hosted_url"],
+            )
+            result["raw_url"] = raw_url
+            result["raw_mime_type"] = provider_result.mime_type
+        except StorageError as e:
+            logger.warning("Failed to store raw image: %s", e)
+
+    result["response_mode"] = "url"
+
+    cost_block = attribution.get("cost", {})
+    logger.info(
+        "event=image_generated "
+        "provider=%s model=%s brand_context=%s amount_eur=%.6f "
+        "tier=%s schema_version=%s draft=%s fallback=%s",
+        attribution.get("provider"),
+        provider_result.model,
+        context or "none",
+        float(cost_block.get("amount_eur") or 0.0),
+        cost_block.get("tier", "standard"),
+        attribution.get("schema_version"),
+        draft,
+        fallback_used,
+    )
+
+    # CDI-1264 success ledger line. On the async path `delivery` is always
+    # "delivered": the background render has no stream to tear down, and the
+    # caller recovers the URL by polling get_image_result / list_recent_generations.
+    _record_generation_attempt(
+        request_id=job_id,
+        outcome="success",
+        model=provider_result.model,
+        provider=attribution.get("provider"),
+        brand=context,
+        width=w,
+        height=h,
+        latency_ms=latency_ms(),
+        hosted_url=hosted_url,
+        cost_estimate_eur=(cost_block or {}).get("amount_eur"),
+        delivery="delivered",
+    )
+    registry.mark_done(job_id, result)
+    return result
+
+
+async def _render_diagram_job(
+    *,
+    job_id: str,
+    selected_provider: str,
+    specific_model: str | None,
+    enhanced_prompt: str,
+    prompt: str | None,
+    format: str,
+    register: str,
+    w: int,
+    h: int,
+    est_cost: float | None,
+) -> dict[str, Any]:
+    """Run the diagram render+store pipeline and return the result dict.
+
+    Detached-task sibling of :func:`_render_image_job`; diagrams always carry the
+    casey brand context. Same ledger + registry contract.
+    """
+    registry = _jobs.get_registry()
+    latency_ms = _render_clock()
+
+    async def _call_provider(provider_key: str, model_id: str | None = None) -> ProviderResult:
+        provider_fn = PROVIDERS[provider_key]
+        kwargs: dict = {}
+        if provider_key == "openai":
+            if model_id and model_id.startswith("gpt-image"):
+                kwargs["model"] = model_id
+            return await provider_fn(enhanced_prompt, w, h, **kwargs)
+        if provider_key == "gemini":
+            if model_id is None or model_id in ("gemini", "nano-banana-pro"):
+                kwargs["model"] = "gemini-3-pro-image-preview"
+            elif model_id.startswith("gemini-"):
+                kwargs["model"] = model_id
+            return await provider_fn(enhanced_prompt, w, h, **kwargs)
+        return await provider_fn(enhanced_prompt, w, h, **kwargs)
+
+    fallback_used = False
+    original_provider = None
+
+    try:
+        provider_result = await _call_provider(selected_provider, specific_model)
+    except Exception as e:
+        logger.warning(
+            "Diagram provider %s failed: %s — trying fallback", selected_provider, e
+        )
+        fallback_provider = FALLBACKS.get(selected_provider)
+        if not fallback_provider:
+            outcome, category = _classify_generation_error(e)
+            _record_generation_attempt(
+                request_id=job_id,
+                outcome=outcome,
+                model=specific_model or selected_provider,
+                provider=selected_provider,
+                brand="casey",
+                width=w,
+                height=h,
+                latency_ms=latency_ms(),
+                error_category=category,
+                error_message=str(e),
+                cost_estimate_eur=est_cost,
+            )
+            registry.mark_error(job_id, error=str(e), error_category=category)
+            raise
+        try:
+            provider_result = await _call_provider(fallback_provider)
+        except Exception as e2:
+            outcome, category = _classify_generation_error(e2)
+            _record_generation_attempt(
+                request_id=job_id,
+                outcome=outcome,
+                model=fallback_provider,
+                provider=fallback_provider,
+                brand="casey",
+                width=w,
+                height=h,
+                latency_ms=latency_ms(),
+                error_category=category,
+                error_message=str(e2),
+                cost_estimate_eur=est_cost,
+            )
+            registry.mark_error(job_id, error=str(e2), error_category=category)
+            raise
+        fallback_used = True
+        original_provider = selected_provider
+
+    attribution = build_attribution(
+        provider_result=provider_result,
+        prompt_anchor=(prompt or "(mermaid input)"),
+        effective_prompt=enhanced_prompt,
+        brand_context="casey",
+        params={
+            "platform": "diagram",
+            "format": format,
+            "register": register,
+            "dimensions": f"{w}x{h}",
+        },
+    )
+
+    result: dict = {
+        "model": provider_result.model,
+        "cost_estimate": format_legacy_cost_estimate(attribution),
+        "brand_context": "casey",
+        "register": register,
+        "format": format,
+        "dimensions": f"{w}x{h}",
+        "ai_attribution": attribution,
+    }
+    if fallback_used:
+        result["fallback_used"] = True
+        result["intended_provider"] = original_provider
+        result["fallback_reason"] = "provider_error"
+
+    try:
+        processed_bytes = process_image(
+            provider_result=provider_result,
+            target_width=w,
+            target_height=h,
+            prompt=enhanced_prompt,
+            brand_context="casey",
+        )
+        hosted_url = store_image(
+            image_data=processed_bytes,
+            prompt=enhanced_prompt,
+            width=w,
+            height=h,
+            model=provider_result.model,
+            cost_estimate=provider_result.cost_estimate,
+            brand_context="casey",
+            fallback_used=fallback_used,
+            original_model=original_provider,
+            attribution=attribution,
+        )
+    except Exception as e:
+        outcome, category = _classify_generation_error(e)
+        _record_generation_attempt(
+            request_id=job_id,
+            outcome=outcome,
+            model=provider_result.model,
+            provider=attribution.get("provider"),
+            brand="casey",
+            width=w,
+            height=h,
+            latency_ms=latency_ms(),
+            error_category=category,
+            error_message=str(e),
+            cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
+        )
+        registry.mark_error(job_id, error=str(e), error_category=category)
+        raise
+    result["hosted_url"] = hosted_url
+    result["response_mode"] = "url"
+
+    cost_block = attribution.get("cost", {})
+    logger.info(
+        "event=diagram_generated "
+        "provider=%s model=%s format=%s register=%s amount_eur=%.6f "
+        "tier=%s schema_version=%s fallback=%s",
+        attribution.get("provider"),
+        provider_result.model,
+        format,
+        register,
+        float(cost_block.get("amount_eur") or 0.0),
+        cost_block.get("tier", "standard"),
+        attribution.get("schema_version"),
+        fallback_used,
+    )
+
+    _record_generation_attempt(
+        request_id=job_id,
+        outcome="success",
+        model=provider_result.model,
+        provider=attribution.get("provider"),
+        brand="casey",
+        width=w,
+        height=h,
+        latency_ms=latency_ms(),
+        hosted_url=hosted_url,
+        cost_estimate_eur=(cost_block or {}).get("amount_eur"),
+        delivery="delivered",
+    )
+    registry.mark_done(job_id, result)
+    return result
+
+
+async def _dispatch_and_maybe_wait(
+    *,
+    job_id: str,
+    coro_factory: Callable[[], Any],
+    model: str | None,
+    brand: str | None,
+    dimensions: str,
+    sync_wait_seconds: float,
+    ctx: Context | None,
+    on_closed_stream: Callable[[], None] | None = None,
+) -> dict[str, Any] | None:
+    """Dispatch a render coroutine DETACHED, then optionally inline-wait for it.
+
+    This is the hybrid dispatch core (CDI-1266). It:
+
+    1. Registers the job (status=pending) keyed by ``job_id`` (== ledger request_id).
+    2. Spawns ``coro_factory()`` detached from the request scope (jobs.spawn_detached)
+       so the render survives this request's teardown.
+    3. If ``sync_wait_seconds > 0``, inline-waits up to that budget for the render
+       to finish. ``asyncio.wait`` with a timeout does NOT cancel the task on
+       timeout — the render keeps going on the detached task regardless.
+
+    Returns:
+        * the full result dict if the render finished within the wait budget
+          (fast path → backward-compatible synchronous response), or
+        * ``{job_id, status: "pending", poll_with: "get_image_result"}`` if it
+          didn't finish in time (slow path → caller polls).
+
+    Raises:
+        Whatever the render coroutine raised, IF it failed within the inline-wait
+        window — re-raised verbatim so a fast failure matches the old synchronous
+        error contract (exact exception type + message). A failure that happens
+        AFTER the wait window times out is NOT raised here (the caller already got
+        a job handle); it's recorded on the job/ledger and surfaced via
+        get_image_result.
+    """
+    registry = _jobs.get_registry()
+    registry.create(job_id, model=model, brand=brand, dimensions=dimensions)
+
+    task = _jobs.spawn_detached(coro_factory, name=f"render:{job_id}")
+
+    def _job_handle() -> dict[str, Any]:
+        return {
+            "job_id": job_id,
+            "status": "pending",
+            "poll_with": "get_image_result",
+            "model": model,
+            "brand_context": brand,
+            "dimensions": dimensions,
+        }
+
+    if sync_wait_seconds <= 0:
+        return _job_handle()
+
+    # Inline-wait WITHOUT cancelling the task on timeout. asyncio.wait never
+    # cancels its awaited futures, and even if THIS request is cancelled, the
+    # detached task is owned by the module registry, not by this coroutine's
+    # scope — so the render keeps running regardless of the wait outcome.
+    done, _pending = await asyncio.wait({task}, timeout=sync_wait_seconds)
+
+    if task in done:
+        # Finished within budget. Surface success inline, or re-raise the same
+        # exception the synchronous path would have raised (preserving type).
+        exc = task.exception()
+        if exc is not None:
+            await _info(
+                ctx, f"Generation failed: {exc}", on_closed_stream=on_closed_stream
+            )
+            raise exc
+        return task.result()
+
+    # Did not finish in time → return a job handle. The render continues on the
+    # detached task; the caller polls get_image_result(job_id).
+    await _info(
+        ctx,
+        f"Render exceeds the {int(sync_wait_seconds)}s inline budget; "
+        f"returning job_id {job_id} — poll get_image_result.",
+        on_closed_stream=on_closed_stream,
+    )
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "poll_with": "get_image_result",
+        "model": model,
+        "brand_context": brand,
+        "dimensions": dimensions,
+    }
+
+
 def _read_reference_bytes(path: Path) -> bytes:
     """Read ``path`` once per process; subsequent reads return the cached bytes."""
     cached = _REFERENCE_BYTES_CACHE.get(path)
@@ -550,13 +1061,30 @@ async def generate_image(
     reference_images: list[bytes] | None = None,
     include_dogs: bool | None = None,
     draft: bool = False,
+    background: bool = False,
     ctx: Context | None = None,
 ) -> GenerateImageResult:
     """[image] Generate a brand-aware image.
 
-    Returns a hosted URL by default (when hosting is enabled). The image is
-    resized/cropped to exact dimensions, converted to WebP, and stored with
-    AI provenance metadata.
+    Response shape is a UNION (CDI-1266 async dispatch+poll):
+
+    * **Result** (fast path) — when the render finishes within the safe inline
+      budget (``sync_wait_seconds``, default ~40s, comfortably under the ~60s
+      Cloudflare-portal timeout), you get the hosted image inline exactly as
+      before: ``{hosted_url, model, cost_estimate, dimensions, ai_attribution,
+      response_mode: "url", ...}``.
+    * **Job handle** (slow path) — when the render does NOT finish in time (most
+      gpt-image-2 / Nano-Banana-Pro renders take 50-80s), you get
+      ``{job_id, status: "pending", poll_with: "get_image_result", model,
+      brand_context, dimensions}`` immediately. The render KEEPS RUNNING
+      server-side; call ``get_image_result(job_id)`` (optionally with
+      ``wait_seconds`` to long-poll) to retrieve the ``hosted_url`` once it
+      completes. This avoids the portal severing a slow synchronous response
+      with ``-32001`` even though the image was produced.
+
+    Always inspect ``status`` / the presence of ``job_id``: if you got a job
+    handle, poll ``get_image_result`` rather than treating the absence of
+    ``hosted_url`` as a failure.
 
     Active providers (May 2026 brand collapse): OpenAI gpt-image-2 (default
     raster) and Gemini Nano Banana (fallback). FLUX and Recraft are
@@ -591,6 +1119,11 @@ async def generate_image(
             identity pack is loaded for the resolved context.
         draft: If true, route OpenAI to ``gpt-image-1-mini`` (cheap tier).
                 Trades quality for cost.
+        background: If true, return the ``{job_id, status: "pending"}`` handle
+                IMMEDIATELY without the inline wait (equivalent to
+                ``sync_wait_seconds=0``). Use when you'd rather poll than hold the
+                connection open. Default false (hybrid: inline-wait then fall back
+                to a job handle).
     """
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
@@ -671,26 +1204,6 @@ async def generate_image(
         parts.append(f"Mood/emotional register: {mood}")
     enhanced_prompt = "\n".join(parts)
 
-    # Generate with fallback
-    fallback_used = False
-    original_model = None
-
-    async def _call_provider(provider_key: str, model_id: str | None = None) -> ProviderResult:
-        provider_fn = PROVIDERS[provider_key]
-        kwargs: dict = {}
-        if has_refs:
-            kwargs["reference_images"] = refs_bytes
-        if provider_key == "openai":
-            # OpenAI provider accepts draft to route to gpt-image-1-mini.
-            # If the caller pinned an explicit gpt-image-* via model, pass it through.
-            kwargs["draft"] = draft
-            if model_id and model_id.startswith("gpt-image"):
-                kwargs["model"] = model_id
-            return await provider_fn(enhanced_prompt, w, h, **kwargs)
-        if provider_key == "flux" and model_id:
-            return await provider_fn(enhanced_prompt, w, h, model=model_id, **kwargs)
-        return await provider_fn(enhanced_prompt, w, h, **kwargs)
-
     fallback_map = REFERENCE_FALLBACKS if has_refs else FALLBACKS
 
     # Cost-confirmation gate (defensive elicit). Surface the estimated EUR
@@ -716,217 +1229,80 @@ async def generate_image(
             "estimated_cost_eur": est_cost,
         }
 
-    # --- Outcome ledger (CDI-1264): one record per ATTEMPT --------------
-    # `request_id` correlates the success/failure line; `_dispatch_t0` starts
-    # the dispatch→result (or dispatch→error) latency clock; `_delivery_state`
-    # flips to teardown if a post-dispatch progress/info write hits a closed
-    # streamable-HTTP stream (the render still succeeds — see _progress).
-    request_id = _ledger.new_request_id()
-    _dispatch_t0 = time.monotonic()
-    _delivery_state: dict[str, str] = {"delivery": "delivered"}
+    # --- Async dispatch+poll (CDI-1266) ---------------------------------
+    # The render runs DETACHED from this request scope so it survives the
+    # ~60s Cloudflare-portal teardown (gpt-image-2 / Nano-Banana-Pro take
+    # 50-80s). `job_id` IS the CDI-1264 ledger request_id, so a result that
+    # falls out of the in-process registry (restart / other worker) is still
+    # recoverable from the durable ledger by the same id.
+    resolved_slots = (
+        _resolved_slot_names(pack, resolved_paths)
+        if (used_identity_pack and pack is not None)
+        else []
+    )
+    job_id = _ledger.new_request_id()
 
     def _mark_torn_down() -> None:
-        _delivery_state["delivery"] = "teardown_closed_stream"
+        # On the async path the render itself doesn't write to the stream, so a
+        # closed inline-wait notification doesn't taint the render's delivery
+        # state — this stays a no-op placeholder for the _info guard signature.
+        pass
 
-    def _latency_ms() -> int:
-        return int((time.monotonic() - _dispatch_t0) * 1000)
+    sync_wait = 0 if background else max(0, int(settings.sync_wait_seconds))
 
     await _progress(
-        ctx, 2, 5, f"Generating image via {selected_provider} (this can take 30-60s)",
+        ctx, 2, 5,
+        f"Dispatching image render via {selected_provider} "
+        f"(inline-wait up to {sync_wait}s, else returns a job_id to poll)",
         on_closed_stream=_mark_torn_down,
     )
-    try:
-        provider_result = await _call_provider(selected_provider, specific_model)
-    except Exception as e:
-        logger.warning("Provider %s failed: %s — trying fallback", selected_provider, e)
-        fallback_provider = fallback_map.get(selected_provider)
-        if not fallback_provider:
-            # Terminal failure on the no-fallback raster path. Record exactly
-            # one ledger line on the failure path before re-raising.
-            outcome, category = _classify_generation_error(e)
-            _record_generation_attempt(
-                request_id=request_id,
-                outcome=outcome,
-                model=specific_model or selected_provider,
-                provider=selected_provider,
-                brand=context,
-                width=w,
-                height=h,
-                latency_ms=_latency_ms(),
-                error_category=category,
-                error_message=str(e),
-                cost_estimate_eur=est_cost,
-            )
-            raise
-        await _info(
-            ctx, f"{selected_provider} failed; falling back to {fallback_provider}",
-            on_closed_stream=_mark_torn_down,
-        )
-        try:
-            provider_result = await _call_provider(fallback_provider)
-        except Exception as e2:
-            outcome, category = _classify_generation_error(e2)
-            _record_generation_attempt(
-                request_id=request_id,
-                outcome=outcome,
-                model=fallback_provider,
-                provider=fallback_provider,
-                brand=context,
-                width=w,
-                height=h,
-                latency_ms=_latency_ms(),
-                error_category=category,
-                error_message=str(e2),
-                cost_estimate_eur=est_cost,
-            )
-            raise
-        fallback_used = True
-        original_model = selected_provider
 
-    # Per-call structured log for identity resolution (INFO).
-    if used_identity_pack and pack is not None:
-        slot_names = _resolved_slot_names(pack, resolved_paths)
-        logger.info(
-            "identity_resolved brand=%s slots=%s provider=%s has_include_dogs_override=%s",
-            context,
-            slot_names,
-            provider_result.model,
-            include_dogs is not None,
+    def _coro_factory():
+        return _render_image_job(
+            job_id=job_id,
+            selected_provider=selected_provider,
+            specific_model=specific_model,
+            enhanced_prompt=enhanced_prompt,
+            prompt=prompt,
+            w=w,
+            h=h,
+            has_refs=has_refs,
+            refs_bytes=refs_bytes,
+            draft=draft,
+            raw=raw,
+            context=context,
+            platform=platform,
+            used_identity_pack=used_identity_pack,
+            resolved_slot_names=resolved_slots,
+            include_dogs=include_dogs,
+            est_cost=est_cost,
+            fallback_map=fallback_map,
         )
 
-    # Build the canonical ai_attribution payload (CDI-1014 §3). Done before
-    # the response dict so we can derive the legacy cost_estimate from it.
-    attribution = build_attribution(
-        provider_result=provider_result,
-        prompt_anchor=prompt,
-        effective_prompt=enhanced_prompt,
-        brand_context=context,
-        params={
-            "platform": platform,
-            "dimensions": f"{w}x{h}",
-        },
-    )
-
-    # Build base response. `cost_estimate` stays for backward-compat but is
-    # now derived from attribution.cost.amount_eur so it reflects the real
-    # EUR figure, not the provider's raw USD string.
-    result: dict = {
-        "model": provider_result.model,
-        "cost_estimate": format_legacy_cost_estimate(attribution),
-        "brand_context": context,
-        "platform": platform,
-        "dimensions": f"{w}x{h}",
-        "ai_attribution": attribution,
-    }
-
-    if fallback_used:
-        result["fallback_used"] = True
-        result["intended_provider"] = original_model
-        result["fallback_reason"] = "provider_error"
-
-    # Hosting pipeline: process → store → return hosted URL. A failure here
-    # (process/store) means the provider succeeded but the artifact was NOT
-    # persisted; record that honestly on the failure path before re-raising.
-    await _progress(
-        ctx, 3, 5, "Post-processing image (resize, crop, WebP, EXIF)",
+    # On a fast failure _dispatch_and_maybe_wait re-raises the render's exact
+    # exception (matching the old synchronous no-fallback / storage-error
+    # contract). A success returns the inline result; a slow render returns a
+    # {status: "pending"} job handle.
+    dispatched = await _dispatch_and_maybe_wait(
+        job_id=job_id,
+        coro_factory=_coro_factory,
+        model=specific_model or selected_provider,
+        brand=context,
+        dimensions=f"{w}x{h}",
+        sync_wait_seconds=sync_wait,
+        ctx=ctx,
         on_closed_stream=_mark_torn_down,
     )
-    try:
-        processed_bytes = process_image(
-            provider_result=provider_result,
-            target_width=w,
-            target_height=h,
-            prompt=enhanced_prompt,
-            brand_context=context,
-        )
 
+    if dispatched.get("status") == "pending":
         await _progress(
-            ctx, 4, 5, "Storing image and writing provenance sidecar",
+            ctx, 5, 5, "Render dispatched (poll get_image_result)",
             on_closed_stream=_mark_torn_down,
         )
-        hosted_url = store_image(
-            image_data=processed_bytes,
-            prompt=enhanced_prompt,
-            width=w,
-            height=h,
-            model=provider_result.model,
-            cost_estimate=provider_result.cost_estimate,
-            brand_context=context,
-            fallback_used=fallback_used,
-            original_model=original_model,
-            attribution=attribution,
-        )
-    except Exception as e:
-        outcome, category = _classify_generation_error(e)
-        _record_generation_attempt(
-            request_id=request_id,
-            outcome=outcome,
-            model=provider_result.model,
-            provider=attribution.get("provider"),
-            brand=context,
-            width=w,
-            height=h,
-            latency_ms=_latency_ms(),
-            error_category=category,
-            error_message=str(e),
-            cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
-        )
-        raise
-    result["hosted_url"] = hosted_url
-
-    # Store and return raw (unprocessed) provider output if requested
-    if raw:
-        try:
-            raw_url = store_raw_image(
-                image_data=provider_result.image_data,
-                mime_type=provider_result.mime_type,
-                processed_file_path=result["hosted_url"],
-            )
-            result["raw_url"] = raw_url
-            result["raw_mime_type"] = provider_result.mime_type
-        except StorageError as e:
-            logger.warning("Failed to store raw image: %s", e)
-
-    result["response_mode"] = "url"
-
-    # CDI-1014 §11.3 — structured log line per image generation.
-    # One JSON line, no prompt/image content. Enables cost aggregation
-    # via Komodo log queries and bildsprache cost trends over time.
-    cost_block = attribution.get("cost", {})
-    logger.info(
-        "event=image_generated "
-        "provider=%s model=%s brand_context=%s amount_eur=%.6f "
-        "tier=%s schema_version=%s draft=%s fallback=%s",
-        attribution.get("provider"),
-        provider_result.model,
-        context or "none",
-        float(cost_block.get("amount_eur") or 0.0),
-        cost_block.get("tier", "standard"),
-        attribution.get("schema_version"),
-        draft,
-        fallback_used,
-    )
+        return dispatched
 
     await _progress(ctx, 5, 5, "Done", on_closed_stream=_mark_torn_down)
-
-    # CDI-1264 — success ledger line. The render succeeded and the artifact is
-    # stored/indexed; `delivery` captures whether the caller actually received
-    # the response or the streamable-HTTP session was torn down mid-render
-    # (image is recoverable via list_recent_generations either way).
-    _record_generation_attempt(
-        request_id=request_id,
-        outcome="success",
-        model=provider_result.model,
-        provider=attribution.get("provider"),
-        brand=context,
-        width=w,
-        height=h,
-        latency_ms=_latency_ms(),
-        hosted_url=hosted_url,
-        cost_estimate_eur=(cost_block or {}).get("amount_eur"),
-        delivery=_delivery_state["delivery"],
-    )
-    return result
+    return dispatched
 
 
 DiagramFormatLiteral = Literal["flow", "sequence", "state"]
@@ -949,6 +1325,7 @@ async def generate_diagram(
     register: Register = "professional",
     model_hint: DiagramModelHint | None = None,
     dimensions: str | None = None,
+    background: bool = False,
     ctx: Context | None = None,
 ) -> GenerateDiagramResult:
     """[image] Generate a brand-aware diagram (flow / sequence / state).
@@ -958,6 +1335,13 @@ async def generate_diagram(
     is available via ``model_hint='openai'`` (sibling-series consistency,
     reference-image support). FLUX/Recraft hints raise
     PROVIDER_TEMPORARILY_DISABLED.
+
+    Response shape is the same UNION as ``generate_image`` (CDI-1266): a fast
+    render returns the hosted diagram inline; a slow one (Nano Banana Pro 4K can
+    exceed the ~60s portal budget) returns ``{job_id, status: "pending",
+    poll_with: "get_image_result"}`` while the render continues server-side. Poll
+    ``get_image_result(job_id)`` for the eventual ``hosted_url``. Pass
+    ``background=True`` to skip the inline wait and get the job handle immediately.
 
     Exactly one of ``prompt`` or ``mermaid`` must be provided.
 
@@ -1090,29 +1474,6 @@ async def generate_diagram(
     else:
         w, h = 1600, 900
 
-    # Dispatch with fallback (openai ↔ gemini for diagrams).
-    fallback_used = False
-    original_provider = None
-
-    async def _call_provider(provider_key: str, model_id: str | None = None) -> ProviderResult:
-        provider_fn = PROVIDERS[provider_key]
-        kwargs: dict = {}
-        if provider_key == "openai":
-            if model_id and model_id.startswith("gpt-image"):
-                kwargs["model"] = model_id
-            return await provider_fn(enhanced_prompt, w, h, **kwargs)
-        if provider_key == "gemini":
-            # Diagrams default to Nano Banana Pro (top editing/control + 4K
-            # brand graphics). The "nano-banana-pro" hint maps to the same id;
-            # generate_gemini puts it first and keeps the flash model as the
-            # fast fallback (model lineup refresh, CDI-1264).
-            if model_id is None or model_id in ("gemini", "nano-banana-pro"):
-                kwargs["model"] = "gemini-3-pro-image-preview"
-            elif model_id.startswith("gemini-"):
-                kwargs["model"] = model_id
-            return await provider_fn(enhanced_prompt, w, h, **kwargs)
-        return await provider_fn(enhanced_prompt, w, h, **kwargs)
-
     # Cost-confirmation gate (defensive elicit) before the paid render.
     est_cost = estimate_cost_eur(
         provider=selected_provider,
@@ -1135,178 +1496,60 @@ async def generate_diagram(
             "estimated_cost_eur": est_cost,
         }
 
-    # Outcome ledger (CDI-1264) — one record per diagram ATTEMPT, mirroring
+    # --- Async dispatch+poll (CDI-1266) — same detached-render contract as
     # generate_image. Diagrams always carry the casey brand context.
-    request_id = _ledger.new_request_id()
-    _dispatch_t0 = time.monotonic()
-    _delivery_state: dict[str, str] = {"delivery": "delivered"}
+    job_id = _ledger.new_request_id()
 
     def _mark_torn_down() -> None:
-        _delivery_state["delivery"] = "teardown_closed_stream"
+        pass
 
-    def _latency_ms() -> int:
-        return int((time.monotonic() - _dispatch_t0) * 1000)
+    sync_wait = 0 if background else max(0, int(settings.sync_wait_seconds))
 
     await _progress(
-        ctx, 2, 4, f"Rendering diagram via {selected_provider} (this can take 30-60s)",
+        ctx, 2, 4,
+        f"Dispatching diagram render via {selected_provider} "
+        f"(inline-wait up to {sync_wait}s, else returns a job_id to poll)",
         on_closed_stream=_mark_torn_down,
     )
-    try:
-        provider_result = await _call_provider(selected_provider, specific_model)
-    except Exception as e:
-        logger.warning(
-            "Diagram provider %s failed: %s — trying fallback",
-            selected_provider,
-            e,
+
+    def _coro_factory():
+        return _render_diagram_job(
+            job_id=job_id,
+            selected_provider=selected_provider,
+            specific_model=specific_model,
+            enhanced_prompt=enhanced_prompt,
+            prompt=prompt,
+            format=format,
+            register=register,
+            w=w,
+            h=h,
+            est_cost=est_cost,
         )
-        fallback_provider = FALLBACKS.get(selected_provider)
-        if not fallback_provider:
-            outcome, category = _classify_generation_error(e)
-            _record_generation_attempt(
-                request_id=request_id,
-                outcome=outcome,
-                model=specific_model or selected_provider,
-                provider=selected_provider,
-                brand="casey",
-                width=w,
-                height=h,
-                latency_ms=_latency_ms(),
-                error_category=category,
-                error_message=str(e),
-                cost_estimate_eur=est_cost,
-            )
-            raise
-        await _info(
-            ctx, f"{selected_provider} failed; falling back to {fallback_provider}",
+
+    dispatched = await _dispatch_and_maybe_wait(
+        job_id=job_id,
+        coro_factory=_coro_factory,
+        model=specific_model or selected_provider,
+        brand="casey",
+        dimensions=f"{w}x{h}",
+        sync_wait_seconds=sync_wait,
+        ctx=ctx,
+        on_closed_stream=_mark_torn_down,
+    )
+
+    if dispatched.get("status") == "pending":
+        # Diagram job handle: keep the diagram-specific envelope fields so the
+        # response is self-describing even before the render finishes.
+        dispatched.setdefault("register", register)
+        dispatched.setdefault("format", format)
+        await _progress(
+            ctx, 4, 4, "Render dispatched (poll get_image_result)",
             on_closed_stream=_mark_torn_down,
         )
-        try:
-            provider_result = await _call_provider(fallback_provider)
-        except Exception as e2:
-            outcome, category = _classify_generation_error(e2)
-            _record_generation_attempt(
-                request_id=request_id,
-                outcome=outcome,
-                model=fallback_provider,
-                provider=fallback_provider,
-                brand="casey",
-                width=w,
-                height=h,
-                latency_ms=_latency_ms(),
-                error_category=category,
-                error_message=str(e2),
-                cost_estimate_eur=est_cost,
-            )
-            raise
-        fallback_used = True
-        original_provider = selected_provider
-
-    # Diagrams always carry the casey brand context (yorizon-isolated per
-    # the diagram-generation spec). Build attribution accordingly.
-    attribution = build_attribution(
-        provider_result=provider_result,
-        prompt_anchor=(prompt or "(mermaid input)"),
-        effective_prompt=enhanced_prompt,
-        brand_context="casey",
-        params={
-            "platform": "diagram",
-            "format": format,
-            "register": register,
-            "dimensions": f"{w}x{h}",
-        },
-    )
-
-    result: dict = {
-        "model": provider_result.model,
-        "cost_estimate": format_legacy_cost_estimate(attribution),
-        "brand_context": "casey",
-        "register": register,
-        "format": format,
-        "dimensions": f"{w}x{h}",
-        "ai_attribution": attribution,
-    }
-    if fallback_used:
-        result["fallback_used"] = True
-        result["intended_provider"] = original_provider
-        result["fallback_reason"] = "provider_error"
-
-    await _progress(
-        ctx, 3, 4, "Post-processing and storing diagram",
-        on_closed_stream=_mark_torn_down,
-    )
-    try:
-        processed_bytes = process_image(
-            provider_result=provider_result,
-            target_width=w,
-            target_height=h,
-            prompt=enhanced_prompt,
-            brand_context="casey",
-        )
-
-        hosted_url = store_image(
-            image_data=processed_bytes,
-            prompt=enhanced_prompt,
-            width=w,
-            height=h,
-            model=provider_result.model,
-            cost_estimate=provider_result.cost_estimate,
-            brand_context="casey",
-            fallback_used=fallback_used,
-            original_model=original_provider,
-            attribution=attribution,
-        )
-    except Exception as e:
-        outcome, category = _classify_generation_error(e)
-        _record_generation_attempt(
-            request_id=request_id,
-            outcome=outcome,
-            model=provider_result.model,
-            provider=attribution.get("provider"),
-            brand="casey",
-            width=w,
-            height=h,
-            latency_ms=_latency_ms(),
-            error_category=category,
-            error_message=str(e),
-            cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
-        )
-        raise
-    result["hosted_url"] = hosted_url
-    result["response_mode"] = "url"
-
-    # Structured log for cost aggregation, mirrors generate_image.
-    cost_block = attribution.get("cost", {})
-    logger.info(
-        "event=diagram_generated "
-        "provider=%s model=%s format=%s register=%s amount_eur=%.6f "
-        "tier=%s schema_version=%s fallback=%s",
-        attribution.get("provider"),
-        provider_result.model,
-        format,
-        register,
-        float(cost_block.get("amount_eur") or 0.0),
-        cost_block.get("tier", "standard"),
-        attribution.get("schema_version"),
-        fallback_used,
-    )
+        return dispatched
 
     await _progress(ctx, 4, 4, "Done", on_closed_stream=_mark_torn_down)
-
-    # CDI-1264 — success ledger line for the diagram attempt.
-    _record_generation_attempt(
-        request_id=request_id,
-        outcome="success",
-        model=provider_result.model,
-        provider=attribution.get("provider"),
-        brand="casey",
-        width=w,
-        height=h,
-        latency_ms=_latency_ms(),
-        hosted_url=hosted_url,
-        cost_estimate_eur=(cost_block or {}).get("amount_eur"),
-        delivery=_delivery_state["delivery"],
-    )
-    return result
+    return dispatched
 
 
 @mcp.tool(
@@ -1610,6 +1853,108 @@ async def generation_stats(
         days=effective_days,
         limit=limit,
     )
+
+
+@mcp.tool(
+    annotations={
+        "title": "Get Image Result",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+async def get_image_result(
+    job_id: str,
+    wait_seconds: int = 0,
+) -> GetImageResult:
+    """[image] Retrieve (or poll for) the result of an async image/diagram render.
+
+    Pair tool for the CDI-1266 async dispatch+poll flow: when ``generate_image`` /
+    ``generate_diagram`` returns ``{job_id, status: "pending"}`` (because the
+    render exceeded the safe inline budget under the ~60s Cloudflare-portal
+    timeout), call this with the ``job_id`` to get the eventual ``hosted_url``.
+
+    Returns ``{job_id, status, ...}`` where ``status`` is one of:
+
+    * ``done``      — the render finished. The full generate_* result is spread in
+      at the top level (``hosted_url``, ``model``, ``cost_estimate``,
+      ``ai_attribution``, ``latency_ms``, ...).
+    * ``pending``   — still rendering. Poll again (optionally raise
+      ``wait_seconds`` to long-poll).
+    * ``error``     — the render failed; ``error`` carries the message and
+      ``error_category`` the exception class.
+    * ``not_found`` — the ``job_id`` is unknown to both the in-process registry
+      AND the durable ledger (never dispatched, or evicted with no ledger line).
+
+    Resolution order:
+
+    1. The in-process job registry (live status + the exact result dict).
+    2. **Durable ledger fallback** (CDI-1264): if the registry has no record
+      (container restarted mid/after render, or a different worker handled the
+      dispatch), the ledger is consulted by ``request_id == job_id``. A
+      ``success`` record yields ``status: "done"`` with its stored ``hosted_url``;
+      a failure record yields ``status: "error"``. This makes results recoverable
+      across restarts. ``list_recent_generations`` remains the broad recovery path
+      when you don't have the ``job_id``.
+
+    Reads only local state (registry + JSONL ledger) — NO provider call, NO cost.
+
+    Args:
+        job_id: The id returned by generate_image/generate_diagram in the
+            ``{job_id, status: "pending"}`` handle (== the generation request_id).
+        wait_seconds: Optional long-poll budget. When > 0, waits up to this many
+            seconds (clamped to a safe ceiling under the portal limit) for a
+            ``pending`` job to finish before returning. Default 0 = return current
+            status immediately so the client controls the poll cadence.
+    """
+    registry = _jobs.get_registry()
+
+    # Clamp the long-poll budget under the portal read timeout so a poll can
+    # never itself be severed by the ~60s gateway.
+    budget = max(0, min(int(wait_seconds), int(settings.poll_wait_max_seconds)))
+
+    record = await registry.wait_for(job_id, timeout=budget)
+    if record is not None:
+        out = record.to_status_dict()
+        out["source"] = "registry"
+        return out
+
+    # Registry miss → durable ledger fallback (recoverable across restarts /
+    # workers). The ledger keys on request_id, which IS the job_id.
+    led = _ledger.find_by_request_id(job_id)
+    if led is not None:
+        outcome = led.get("outcome")
+        if outcome == "success":
+            return {
+                "job_id": job_id,
+                "status": "done",
+                "hosted_url": led.get("hosted_url"),
+                "model": led.get("model"),
+                "brand_context": led.get("brand"),
+                "dimensions": led.get("requested_size"),
+                "latency_ms": led.get("latency_ms"),
+                "cost_estimate_eur": led.get("cost_estimate_eur"),
+                "source": "ledger",
+            }
+        # Any non-success ledger outcome is a recorded failure.
+        return {
+            "job_id": job_id,
+            "status": "error",
+            "model": led.get("model"),
+            "brand_context": led.get("brand"),
+            "error": led.get("error_message") or outcome,
+            "error_category": led.get("error_category"),
+            "latency_ms": led.get("latency_ms"),
+            "source": "ledger",
+        }
+
+    # Unknown everywhere. NOT an error — the caller can retry or fall back to
+    # list_recent_generations to browse by metadata.
+    return {
+        "job_id": job_id,
+        "status": "not_found",
+        "source": "none",
+    }
 
 
 @mcp.tool(

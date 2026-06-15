@@ -264,6 +264,35 @@ def read_records(
     return out
 
 
+def find_by_request_id(
+    request_id: str, *, path: Path | None = None
+) -> dict[str, Any] | None:
+    """Return the most recent ledger record whose ``request_id`` matches, or None.
+
+    Durable cross-restart fallback for ``get_image_result`` (CDI-1266): when a
+    ``job_id`` (== the ledger ``request_id`` for the same attempt) is no longer in
+    the in-process job registry — container restarted mid/after render, or a
+    different worker handled it — the result is still recoverable here. Scans the
+    ledger tail newest-first and stops at the first matching line, so a hit on a
+    recent attempt is cheap. Never raises on a missing/unreadable file.
+    """
+    if not request_id:
+        return None
+    target = path or _default_path()
+    raw_lines = _iter_lines_reverse(target, max_lines=_MAX_READ_LINES)
+    for line in reversed(raw_lines):  # newest first
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("request_id") == request_id:
+            return rec
+    return None
+
+
 def _parse_ts(raw: Any) -> datetime | None:
     if not isinstance(raw, str):
         return None
