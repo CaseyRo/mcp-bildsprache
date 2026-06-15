@@ -514,6 +514,244 @@ class TestOtherTools:
 
 
 # ---------------------------------------------------------------------------
+# list_recent_generations (CDI-1253 — recover timed-out-but-completed renders)
+# ---------------------------------------------------------------------------
+
+
+def _seed_generation(
+    root: Path,
+    brand: str,
+    slug: str,
+    *,
+    width: int = 1200,
+    height: int = 1200,
+    prompt: str = "a prompt",
+    created_at: str | None = None,
+    domain: str = "https://img.cdit-works.de",
+) -> None:
+    """Write a webp + sidecar pair the same shape store_image produces."""
+    d = root / brand
+    d.mkdir(parents=True, exist_ok=True)
+    stem = f"{slug}-{width}x{height}"
+    (d / f"{stem}.webp").write_bytes(b"fakewebpbytes")
+    body = {
+        "prompt": prompt,
+        "model": "gpt-image-2",
+        "cost_estimate": "$0.05",
+        "dimensions": f"{width}x{height}",
+        "hosted_url": f"{domain}/{brand}/{stem}.webp",
+    }
+    if created_at is not None:
+        body["generated_at"] = created_at
+    (d / f"{stem}.json").write_text(json.dumps(body))
+
+
+class TestListRecentGenerations:
+    @pytest.mark.anyio
+    async def test_returns_newest_first_with_urls(self, tmp_path: Path):
+        from mcp_bildsprache.server import list_recent_generations
+
+        _seed_generation(
+            tmp_path, "casey", "old", prompt="oldest",
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        _seed_generation(
+            tmp_path, "casey", "new", prompt="newest",
+            created_at="2026-06-01T00:00:00+00:00",
+        )
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            result = await list_recent_generations()
+
+        assert result["total"] == 2
+        assert result["returned"] == 2
+        gens = result["generations"]
+        # Newest first.
+        assert gens[0]["prompt"] == "newest"
+        assert gens[1]["prompt"] == "oldest"
+        # Hosted URL is recoverable for each (the CDI-1253 fix).
+        assert gens[0]["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+        assert gens[0]["hosted_url"].endswith(".webp")
+        assert gens[0]["created_at"].startswith("2026-06-01")
+
+    @pytest.mark.anyio
+    async def test_brand_filter(self, tmp_path: Path):
+        from mcp_bildsprache.server import list_recent_generations
+
+        _seed_generation(tmp_path, "casey", "a")
+        _seed_generation(tmp_path, "yorizon", "b")
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            result = await list_recent_generations(brand="yorizon")
+
+        assert result["total"] == 1
+        assert result["brand"] == "yorizon"
+        assert all(g["brand"] == "yorizon" for g in result["generations"])
+
+    @pytest.mark.anyio
+    async def test_legacy_brand_alias_matches_dir(self, tmp_path: Path):
+        from mcp_bildsprache.server import list_recent_generations
+
+        # Legacy 'casey-berlin' directory still serves historical URLs; a
+        # caller asking for that key should match the verbatim dir.
+        _seed_generation(tmp_path, "casey-berlin", "legacy")
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            result = await list_recent_generations(brand="casey-berlin")
+
+        assert result["total"] == 1
+        assert result["generations"][0]["brand"] == "casey-berlin"
+
+    @pytest.mark.anyio
+    async def test_limit_and_offset(self, tmp_path: Path):
+        from mcp_bildsprache.server import list_recent_generations
+
+        for i in range(5):
+            _seed_generation(
+                tmp_path, "casey", f"img{i}", prompt=f"p{i}",
+                created_at=f"2026-06-0{i + 1}T00:00:00+00:00",
+            )
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            page1 = await list_recent_generations(limit=2, offset=0)
+            page2 = await list_recent_generations(limit=2, offset=2)
+
+        assert page1["total"] == 5
+        assert page1["returned"] == 2
+        assert page1["limit"] == 2
+        # Newest first → p4, p3 on the first page; p2, p1 on the second.
+        assert [g["prompt"] for g in page1["generations"]] == ["p4", "p3"]
+        assert [g["prompt"] for g in page2["generations"]] == ["p2", "p1"]
+
+    @pytest.mark.anyio
+    async def test_empty_dir_returns_clean_empty(self, tmp_path: Path):
+        """Unhappy path: no generations → clean empty result, not an error."""
+        from mcp_bildsprache.server import list_recent_generations
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            result = await list_recent_generations(brand="casey")
+
+        assert "error" not in result
+        assert result["total"] == 0
+        assert result["returned"] == 0
+        assert result["generations"] == []
+
+    @pytest.mark.anyio
+    async def test_limit_zero_reports_total_but_no_page(self, tmp_path: Path):
+        """Unhappy path: limit=0 returns no items but still reports total."""
+        from mcp_bildsprache.server import list_recent_generations
+
+        _seed_generation(tmp_path, "casey", "a")
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            result = await list_recent_generations(limit=0)
+
+        assert result["total"] == 1
+        assert result["returned"] == 0
+        assert result["limit"] == 0
+        assert result["generations"] == []
+
+
+# ---------------------------------------------------------------------------
+# Progress / log notification guard (CDI-1253 — closed streamable-HTTP session)
+# ---------------------------------------------------------------------------
+
+
+class TestProgressLogGuard:
+    @pytest.mark.anyio
+    async def test_progress_swallows_closed_stream(self):
+        """A closed-session write must NOT propagate out of _progress —
+        otherwise it tears down the still-running tool call (the -32001 bug).
+        """
+        import anyio
+
+        from mcp_bildsprache.server import _progress
+
+        ctx = AsyncMock()
+        ctx.report_progress.side_effect = anyio.ClosedResourceError()
+
+        # Must return None without raising.
+        assert await _progress(ctx, 1, 5, "step") is None
+        ctx.report_progress.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_info_swallows_broken_stream(self):
+        import anyio
+
+        from mcp_bildsprache.server import _info
+
+        ctx = AsyncMock()
+        ctx.info.side_effect = anyio.BrokenResourceError()
+
+        assert await _info(ctx, "hello") is None
+        ctx.info.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_progress_swallows_generic_exception(self):
+        from mcp_bildsprache.server import _progress
+
+        ctx = AsyncMock()
+        ctx.report_progress.side_effect = RuntimeError("boom")
+
+        assert await _progress(ctx, 1, 5, "step") is None
+
+    @pytest.mark.anyio
+    async def test_generate_image_completes_despite_closed_session(
+        self, tmp_path: Path, mock_provider
+    ):
+        """End-to-end: a session that dies on the FIRST progress write still
+        produces a stored, indexed artifact recoverable via the index — proving
+        the guard keeps the render alive instead of crashing the session.
+        """
+        import anyio
+
+        from mcp_bildsprache.server import generate_image, list_recent_generations
+
+        ctx = AsyncMock()
+        # Every progress + info write fails as if the session timed out.
+        ctx.report_progress.side_effect = anyio.ClosedResourceError()
+        ctx.info.side_effect = anyio.ClosedResourceError()
+        # No elicitation handler → _confirm_cost proceeds.
+        ctx.elicit.side_effect = anyio.ClosedResourceError()
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_image(
+                prompt="a resilient render",
+                context="casey",
+                platform="blog-hero",
+                ctx=ctx,
+            )
+
+            # The render completed despite every notification write failing.
+            assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+
+            # And it's recoverable via the listing tool.
+            recovered = await list_recent_generations()
+
+        assert recovered["total"] == 1
+        assert recovered["generations"][0]["hosted_url"] == result["hosted_url"]
+
+
+# ---------------------------------------------------------------------------
 # generate_diagram (May 2026 brand-collapse follow-up)
 # ---------------------------------------------------------------------------
 
