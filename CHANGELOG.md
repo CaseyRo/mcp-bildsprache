@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.42] - 2026-06-15
+
+- feat(bildsprache): async dispatch+poll for image generation (CDI-1266)
+
+
 ## [0.3.40] - 2026-06-10
 
 - feat(bildsprache): defensive cost-confirmation elicit on paid generation (shelf) (#26)
