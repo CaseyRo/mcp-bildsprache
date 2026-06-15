@@ -200,6 +200,51 @@ class RecentGenerationsResult(BaseModel):
     brand: Optional[str] = Field(default=None, description="Brand filter applied, if any.")
 
 
+class ModelStat(BaseModel):
+    """Per-model aggregate row in :func:`generation_stats`."""
+
+    model_config = ConfigDict(extra="allow")
+
+    model: str = Field(description="Model id the attempts ran against (or 'unknown').")
+    attempts: int = Field(default=0, description="Total generation attempts for this model in-window.")
+    successes: int = Field(default=0, description="Attempts whose outcome was 'success'.")
+    failures: int = Field(default=0, description="Attempts whose outcome was not 'success'.")
+    success_rate: float = Field(default=0.0, description="successes / attempts, 0.0-1.0 (0 when no attempts).")
+    success_pct: float = Field(default=0.0, description="success_rate as a percentage (0-100).")
+    outcomes: dict[str, int] = Field(
+        default_factory=dict,
+        description="Outcome -> count breakdown (success, provider_error, timeout, teardown_closed_stream, other).",
+    )
+
+
+class GenerationStatsResult(BaseModel):
+    """Structured result of :func:`generation_stats` (CDI-1264).
+
+    Reads the durable append-only outcome ledger and reports attempts /
+    successes / failures and success% grouped by model over a time window.
+    Reads only local JSONL — no provider call, no cost. An empty ledger (or a
+    window with no records) returns clean zeros, never an error.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    window: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Window applied: {since (ISO8601|null), days (int|null), limit (int|null)}.",
+    )
+    totals: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Aggregate across all models: attempts, successes, failures, "
+            "success_rate, success_pct, plus delivered vs teardown_closed_stream "
+            "(succeeded-but-undelivered) split."
+        ),
+    )
+    by_model: list[ModelStat] = Field(
+        default_factory=list, description="Per-model stats, first-seen order."
+    )
+
+
 class ProviderInfo(BaseModel):
     """One active provider entry advertised by :func:`list_models`."""
 

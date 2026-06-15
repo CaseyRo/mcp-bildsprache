@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     image_domain: str = "https://img.cdit-works.de"
     image_storage_path: str = "/data/images"
 
+    # Generation outcome ledger (CDI-1264). Append-only JSONL on the same
+    # persistent volume as the gallery, recording one record per generation
+    # ATTEMPT (success AND failure) so attempts-vs-model-vs-outcome is
+    # measurable over time — failures otherwise live only in ephemeral
+    # container logs and vanish on restart. Writes are best-effort and never
+    # break a generation. When ``ledger_path`` is unset (the default) it is
+    # derived from ``image_storage_path`` as
+    # ``<image_storage_path>/_ledger/generations.jsonl``.
+    ledger_enabled: bool = True
+    ledger_path: str = ""
+
     # Identity packs (personal likeness reference images; private volume)
     identity_dir: Path = Path("/data/identity")
     identity_enabled: bool = True
@@ -102,6 +113,20 @@ class Settings(BaseSettings):
         if self.mcp_bildsprache_public_url:
             return self.mcp_bildsprache_public_url.rstrip("/")
         return f"http://{self.host}:{self.port}"
+
+    @property
+    def resolved_ledger_path(self) -> Path:
+        """Absolute path to the generation outcome ledger (JSONL).
+
+        Defaults to ``<image_storage_path>/_ledger/generations.jsonl`` so the
+        ledger lives on the same persistent volume as the gallery (survives a
+        container restart). The ``_ledger`` directory sits *outside* any brand
+        prefix, so the static mount never serves it. Set ``LEDGER_PATH`` to
+        override with an explicit file path.
+        """
+        if self.ledger_path:
+            return Path(self.ledger_path)
+        return Path(self.image_storage_path) / "_ledger" / "generations.jsonl"
 
 
 settings = Settings()
