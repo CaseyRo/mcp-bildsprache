@@ -1,5 +1,6 @@
 """Integration tests for generate_image end-to-end with hosting pipeline."""
 
+import asyncio
 import io
 import json
 from pathlib import Path
@@ -763,6 +764,350 @@ class TestProgressLogGuard:
 
 
 # ---------------------------------------------------------------------------
+# Async dispatch+poll (CDI-1266) — generate_image / get_image_result
+# ---------------------------------------------------------------------------
+
+
+def _slow_provider(delay: float = 5.0):
+    """An AsyncMock-shaped provider whose render takes `delay` seconds.
+
+    Used to force the inline-wait budget to expire so generate_image returns a
+    {job_id, status: "pending"} handle while the (detached) render keeps going.
+    """
+
+    async def _render(*args, **kwargs):
+        await asyncio.sleep(delay)
+        return _fake_provider_result()
+
+    return _render
+
+
+class TestAsyncDispatchPoll:
+    @staticmethod
+    def _point_ledger_at(tmp_path: Path, monkeypatch) -> Path:
+        from mcp_bildsprache.config import settings as cfg
+
+        ledger_file = tmp_path / "_ledger" / "generations.jsonl"
+        monkeypatch.setattr(cfg, "ledger_enabled", True)
+        monkeypatch.setattr(cfg, "ledger_path", str(ledger_file))
+        return ledger_file
+
+    @pytest.fixture(autouse=True)
+    def _fresh_registry(self, monkeypatch):
+        from mcp_bildsprache import jobs
+
+        reg = jobs.JobRegistry()
+        monkeypatch.setattr(jobs, "_REGISTRY", reg)
+        yield reg
+        # Cancel any leftover detached render tasks (e.g. the deliberately-slow
+        # 5s provider) so they don't outlive the test's event loop.
+        for task in list(jobs._BACKGROUND_TASKS):
+            task.cancel()
+
+    @pytest.mark.anyio
+    async def test_fast_render_returns_hosted_url_inline(
+        self, tmp_path: Path, mock_provider
+    ):
+        """Backward compatible: a render that finishes within sync_wait_seconds
+        returns the hosted_url inline exactly as before (no job handle)."""
+        from mcp_bildsprache.server import generate_image
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            s.sync_wait_seconds = 30  # plenty for the instant mock
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_image(
+                prompt="fast", context="casey", dimensions="512x512"
+            )
+
+        assert "job_id" not in result
+        assert result.get("status") != "pending"
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+        assert result["response_mode"] == "url"
+
+    @pytest.mark.anyio
+    async def test_slow_render_returns_job_handle(
+        self, tmp_path: Path, _fresh_registry
+    ):
+        """A render exceeding the inline budget returns {job_id, status:pending}
+        within the budget — NOT the hosted_url."""
+        slow = _slow_provider(delay=5.0)
+
+        with patch(
+            "mcp_bildsprache.server.PROVIDERS",
+            {"openai": slow, "gemini": slow, "flux": slow, "recraft": slow},
+        ), patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            s.sync_wait_seconds = 0.1  # tiny budget → handle returned fast
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            from mcp_bildsprache.server import generate_image
+
+            result = await generate_image(
+                prompt="slow", context="casey", dimensions="512x512"
+            )
+
+        assert result["status"] == "pending"
+        assert result["poll_with"] == "get_image_result"
+        assert "hosted_url" not in result
+        assert result["job_id"]
+        # The job is registered as pending right after dispatch.
+        rec = _fresh_registry.get(result["job_id"])
+        assert rec is not None and rec.status == "pending"
+
+    @pytest.mark.anyio
+    async def test_background_true_returns_handle_immediately(
+        self, tmp_path: Path, mock_provider, _fresh_registry
+    ):
+        """background=True skips the inline wait → immediate job handle even for
+        a fast render."""
+        from mcp_bildsprache.server import generate_image
+
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            s.sync_wait_seconds = 30
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = await generate_image(
+                prompt="bg", context="casey", dimensions="512x512", background=True
+            )
+
+        assert result["status"] == "pending"
+        assert result["job_id"]
+
+    @pytest.mark.anyio
+    async def test_background_render_completes_and_writes_ledger_after_return(
+        self, tmp_path: Path, _fresh_registry, monkeypatch
+    ):
+        """CORE RISK: the detached render COMPLETES, updates the registry, AND
+        writes the CDI-1264 ledger line even though generate_image already
+        returned a pending handle (the dispatching request is done)."""
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import generate_image, get_image_result
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+        slow = _slow_provider(delay=0.15)
+
+        with patch(
+            "mcp_bildsprache.server.PROVIDERS",
+            {"openai": slow, "gemini": slow, "flux": slow, "recraft": slow},
+        ), patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            s.sync_wait_seconds = 0.01  # return handle before render finishes
+            s.poll_wait_max_seconds = 55
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            dispatched = await generate_image(
+                prompt="detached", context="casey", dimensions="512x512"
+            )
+            assert dispatched["status"] == "pending"
+            job_id = dispatched["job_id"]
+
+            # The dispatching call has returned; the render is still running on a
+            # detached task. Poll until it finishes (long-poll does the waiting).
+            polled = await get_image_result(job_id, wait_seconds=5)
+
+        assert polled["status"] == "done"
+        assert polled["source"] == "registry"
+        assert polled["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+
+        # The artifact was actually written to disk by the detached task.
+        webp_files = list(tmp_path.rglob("*.webp"))
+        assert len(webp_files) == 1
+
+        # And the ledger line fired on the async path.
+        recs = ledmod.read_records(path=ledger_file)
+        assert len(recs) == 1
+        assert recs[0]["outcome"] == "success"
+        assert recs[0]["request_id"] == job_id
+        assert recs[0]["delivery"] == "delivered"
+        assert recs[0]["hosted_url"] == polled["hosted_url"]
+
+    @pytest.mark.anyio
+    async def test_get_image_result_pending_then_done(
+        self, tmp_path: Path, _fresh_registry, monkeypatch
+    ):
+        """A single-shot poll (wait_seconds=0) returns pending while in flight,
+        then done once the detached render completes."""
+        self._point_ledger_at(tmp_path, monkeypatch)
+        slow = _slow_provider(delay=0.2)
+
+        with patch(
+            "mcp_bildsprache.server.PROVIDERS",
+            {"openai": slow, "gemini": slow, "flux": slow, "recraft": slow},
+        ), patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            s.sync_wait_seconds = 0.01
+            s.poll_wait_max_seconds = 55
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            from mcp_bildsprache.server import generate_image, get_image_result
+
+            dispatched = await generate_image(
+                prompt="poll me", context="casey", dimensions="512x512"
+            )
+            job_id = dispatched["job_id"]
+
+            # Immediate single-shot poll → still pending.
+            first = await get_image_result(job_id, wait_seconds=0)
+            assert first["status"] == "pending"
+            assert first["source"] == "registry"
+
+            # Long-poll until done.
+            second = await get_image_result(job_id, wait_seconds=5)
+
+        assert second["status"] == "done"
+        assert second["hosted_url"].startswith("https://img.cdit-works.de/casey/")
+
+    @pytest.mark.anyio
+    async def test_get_image_result_error_surfaced(
+        self, tmp_path: Path, _fresh_registry, monkeypatch
+    ):
+        """A failed detached render surfaces status=error via the poll."""
+        self._point_ledger_at(tmp_path, monkeypatch)
+
+        async def _boom(*a, **k):
+            await asyncio.sleep(0.05)
+            raise RuntimeError("provider exploded")
+
+        with patch(
+            "mcp_bildsprache.server.PROVIDERS",
+            {"openai": _boom, "gemini": _boom},
+        ), patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            s.sync_wait_seconds = 0.01  # return handle before the boom
+            s.poll_wait_max_seconds = 55
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            from mcp_bildsprache.server import generate_image, get_image_result
+
+            dispatched = await generate_image(
+                prompt="will fail", context="casey", dimensions="512x512"
+            )
+            job_id = dispatched["job_id"]
+            polled = await get_image_result(job_id, wait_seconds=5)
+
+        assert polled["status"] == "error"
+        assert "provider exploded" in polled["error"]
+        assert polled["error_category"] == "RuntimeError"
+
+    @pytest.mark.anyio
+    async def test_get_image_result_ledger_fallback_on_registry_miss(
+        self, tmp_path: Path, _fresh_registry, monkeypatch
+    ):
+        """Durable fallback: when the in-process registry has no record (restart /
+        other worker), a successful result is recovered from the ledger by its
+        request_id == job_id."""
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import get_image_result
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+
+        # Seed a ledger record as if a prior process had rendered it. The
+        # in-process registry (fresh per this test) does NOT know this job_id.
+        ledmod.append_record(
+            ledmod.build_record(
+                request_id="orphan-job-1",
+                outcome="success",
+                model="gpt-image-2",
+                provider="openai",
+                brand="casey",
+                width=1024,
+                height=1024,
+                hosted_url="https://img.cdit-works.de/casey/recovered-1024x1024.webp",
+                latency_ms=51234,
+                delivery="delivered",
+            ),
+            path=ledger_file,
+        )
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.poll_wait_max_seconds = 55
+            result = await get_image_result("orphan-job-1")
+
+        assert result["status"] == "done"
+        assert result["source"] == "ledger"
+        assert result["hosted_url"] == (
+            "https://img.cdit-works.de/casey/recovered-1024x1024.webp"
+        )
+        assert result["model"] == "gpt-image-2"
+        assert result["latency_ms"] == 51234
+
+    @pytest.mark.anyio
+    async def test_get_image_result_ledger_fallback_failure(
+        self, tmp_path: Path, _fresh_registry, monkeypatch
+    ):
+        """A failure ledger record (registry miss) resolves to status=error."""
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import get_image_result
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+        ledmod.append_record(
+            ledmod.build_record(
+                request_id="orphan-fail-1",
+                outcome="provider_error",
+                model="gpt-image-2",
+                provider="openai",
+                brand="casey",
+                width=1024,
+                height=1024,
+                error_category="HTTPStatusError",
+                error_message="500 from provider",
+            ),
+            path=ledger_file,
+        )
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.poll_wait_max_seconds = 55
+            result = await get_image_result("orphan-fail-1")
+
+        assert result["status"] == "error"
+        assert result["source"] == "ledger"
+        assert "500 from provider" in result["error"]
+        assert result["error_category"] == "HTTPStatusError"
+
+    @pytest.mark.anyio
+    async def test_get_image_result_not_found(
+        self, tmp_path: Path, _fresh_registry, monkeypatch
+    ):
+        """Unknown to both registry and ledger → status=not_found (not an error)."""
+        self._point_ledger_at(tmp_path, monkeypatch)
+        from mcp_bildsprache.server import get_image_result
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.poll_wait_max_seconds = 55
+            result = await get_image_result("never-existed")
+
+        assert result["status"] == "not_found"
+        assert result["job_id"] == "never-existed"
+
+
+# ---------------------------------------------------------------------------
 # Generation outcome ledger wiring (CDI-1264)
 # ---------------------------------------------------------------------------
 
@@ -848,11 +1193,19 @@ class TestGenerationLedgerWiring:
         assert "latency_ms" in rec
 
     @pytest.mark.anyio
-    async def test_teardown_records_success_with_delivery_flag(
+    async def test_closed_stream_records_success_delivered_on_async_path(
         self, tmp_path: Path, mock_provider, monkeypatch
     ):
-        """Closed-stream during delivery → outcome=success, delivery=teardown
-        (the image really did succeed; the caller just never got the URL)."""
+        """CDI-1266: the render now runs on a DETACHED background task with no
+        stream to tear down, so a closed-stream on the dispatching request's
+        inline-wait notification no longer taints delivery. The ledger record is
+        honestly outcome=success + delivery=delivered (the render's own delivery
+        to disk + registry succeeded); the caller recovers the URL by polling
+        get_image_result / list_recent_generations.
+
+        (Pre-CDI-1266 this recorded delivery=teardown_closed_stream because the
+        render shared the request task; that coupling is gone.)
+        """
         import anyio
 
         from mcp_bildsprache import ledger as ledmod
@@ -870,6 +1223,7 @@ class TestGenerationLedgerWiring:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
             s.image_domain = "https://img.cdit-works.de"
+            s.sync_wait_seconds = 30  # ample for the instant mock → inline result
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
@@ -881,7 +1235,7 @@ class TestGenerationLedgerWiring:
         recs = ledmod.read_records(path=ledger_file)
         assert len(recs) == 1
         assert recs[0]["outcome"] == "success"
-        assert recs[0]["delivery"] == "teardown_closed_stream"
+        assert recs[0]["delivery"] == "delivered"
 
     @pytest.mark.anyio
     async def test_ledger_write_failure_never_breaks_generation(

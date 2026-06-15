@@ -23,11 +23,29 @@ docker compose up --build
   (or auto-resolves from the brand's identity pack when `context` is set). Optional
   `include_dogs: bool | None` overrides the dog-slot heuristic for casey (True =
   force-include Sien + Fimme, False = suppress, None = use manifest rules).
+  **Async dispatch+poll (CDI-1266):** the response is a UNION — a fast render returns the
+  `hosted_url` inline as before; a slow render (gpt-image-2 / Nano-Banana-Pro take 50-80s,
+  past the ~60s Cloudflare-portal timeout) returns `{job_id, status: "pending", poll_with:
+  "get_image_result"}` immediately while the render keeps running server-side. The render
+  is detached from the request scope so it survives the portal teardown. Inline-wait budget
+  is `SYNC_WAIT_SECONDS` (default 40s, under the portal limit); pass `background=true` (or
+  set `SYNC_WAIT_SECONDS=0`) to always get the job handle. Poll with `get_image_result`.
 - `generate_diagram` — Flow / sequence / state diagrams via Gemini Nano Banana Pro
   (`gemini-3-pro-image-preview`, default — top editing/control + 4K brand graphics) or
   OpenAI gpt-image-2 (`model_hint='openai'`). Accepts free-text `prompt` OR Mermaid
   `mermaid` source (parsed into a structured render brief). Brand palette + UML
-  conventions injected automatically. Format scope: `flow`, `sequence`, `state`.
+  conventions injected automatically. Format scope: `flow`, `sequence`, `state`. Same async
+  dispatch+poll response union as `generate_image` (`background=true` for an immediate
+  job handle).
+- `get_image_result` — **NEW (CDI-1266).** Retrieve (or long-poll for) the result of an
+  async render dispatched by `generate_image` / `generate_diagram`. Pass the `job_id` from
+  the pending handle; returns `{status: pending | done | error | not_found, hosted_url?,
+  ...}`. Optional `wait_seconds` long-polls up to a safe ceiling (`POLL_WAIT_MAX_SECONDS`,
+  default 55s, under the portal limit) before returning. Resolves from the in-process job
+  registry first, then falls back to the durable CDI-1264 ledger by `request_id == job_id`
+  so results survive a container restart / different worker. Reads only local state — no
+  provider call, no cost. **Requires a Cloudflare-portal catalog refresh before it is
+  callable through the portal** (see "Portal refresh" below).
 - `generate_prompt` — Prompt engineering only (no image generation).
 - `list_models` — Active providers (`openai`: gpt-image-2 + gpt-image-1.5 + draft;
   `gemini`: Nano Banana Pro + Nano Banana 2) plus a `disabled_providers` array
@@ -38,6 +56,22 @@ docker compose up --build
   `casey` (with `personal` and `professional` register overlays), `yorizon`. Per-brand
   responses include `identity_pack_loaded: bool` and the matching register overlay
   when `register` is supplied.
+- `list_recent_generations` — List the most recently generated artifacts (newest first),
+  reading the on-disk sidecar index. Broad recovery path when a render's response was lost
+  to a portal timeout and you don't have the `job_id`. Optional `brand` / `limit` / `offset`.
+- `generation_stats` — Per-model success/failure stats from the durable CDI-1264 outcome
+  ledger (success AND failure attempts) over a time window. Reads local JSONL only.
+
+## Portal refresh (new tool: `get_image_result`)
+
+`get_image_result` (CDI-1266) is a **NEW tool**. The Cloudflare MCP portal does not
+auto-refresh its tool catalog from upstream, so until the portal catalog is refreshed the
+new tool is invisible/uncallable *through the portal* even after this server is deployed.
+The async dispatch+poll flow degrades gracefully in the meantime: `generate_image` /
+`generate_diagram` still return the `{job_id, status: "pending"}` handle (and fast renders
+still return inline), and the completed artifact remains recoverable via the *existing*
+`list_recent_generations` tool. Once the portal catalog is refreshed, the `job_id` →
+`get_image_result` poll loop becomes available end-to-end.
 
 ## Brands and registers
 

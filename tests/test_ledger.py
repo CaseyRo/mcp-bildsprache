@@ -104,6 +104,53 @@ class TestAppendAndRead:
         assert len(got["error_message"]) <= 500
 
 
+class TestFindByRequestId:
+    """The CDI-1266 durable fallback lookup used by get_image_result."""
+
+    def _seed(self, path: Path, request_id: str, **kw):
+        rec = ledger.build_record(
+            request_id=request_id,
+            outcome=kw.pop("outcome", "success"),
+            model=kw.pop("model", "gpt-image-2"),
+            provider=kw.pop("provider", "openai"),
+            brand=kw.pop("brand", "casey"),
+            width=kw.pop("width", 1024),
+            height=kw.pop("height", 1024),
+            **kw,
+        )
+        ledger.append_record(rec, path=path)
+
+    def test_returns_matching_record(self, tmp_path: Path):
+        led = tmp_path / "led.jsonl"
+        self._seed(led, "a", hosted_url="https://x/a.webp")
+        self._seed(led, "b", hosted_url="https://x/b.webp")
+        got = ledger.find_by_request_id("b", path=led)
+        assert got is not None
+        assert got["request_id"] == "b"
+        assert got["hosted_url"] == "https://x/b.webp"
+
+    def test_returns_newest_when_duplicate_ids(self, tmp_path: Path):
+        led = tmp_path / "led.jsonl"
+        self._seed(led, "dup", hosted_url="https://x/old.webp")
+        self._seed(led, "dup", hosted_url="https://x/new.webp")
+        got = ledger.find_by_request_id("dup", path=led)
+        assert got is not None
+        assert got["hosted_url"] == "https://x/new.webp"
+
+    def test_unknown_id_returns_none(self, tmp_path: Path):
+        led = tmp_path / "led.jsonl"
+        self._seed(led, "a")
+        assert ledger.find_by_request_id("missing", path=led) is None
+
+    def test_missing_file_returns_none(self, tmp_path: Path):
+        assert ledger.find_by_request_id("a", path=tmp_path / "nope.jsonl") is None
+
+    def test_empty_request_id_returns_none(self, tmp_path: Path):
+        led = tmp_path / "led.jsonl"
+        self._seed(led, "a")
+        assert ledger.find_by_request_id("", path=led) is None
+
+
 class TestBestEffortWrites:
     def test_append_never_raises_on_bad_path(self, tmp_path: Path):
         """A write failure must return False, not raise (acceptance: ledger
