@@ -46,6 +46,7 @@ from mcp_bildsprache.models import (
     GenerateImageResult,
     GeneratePromptResult,
     ModelsResult,
+    RecentGenerationsResult,
     VisualPresetsResult,
 )
 from mcp_bildsprache.types import (
@@ -130,6 +131,34 @@ REFERENCE_FALLBACKS: dict[str, str | None] = {
 _REFERENCE_BYTES_CACHE: dict[Path, bytes] = {}
 
 
+# anyio stream-state errors raised when a progress/log notification is
+# written to an already-closed/broken streamable-HTTP session. In stateless
+# HTTP mode (see `main()`), a long render (gpt-image-2 ~50-80s) can outlive
+# the proxy/gateway read timeout; the session's write stream is then closed
+# under us, and the *next* ctx.report_progress / ctx.info / ctx.elicit raises
+# one of these. Left unguarded it propagates out of the tool body and is
+# only caught by mcp's broad `except Exception: logger.exception("Stateless
+# session crashed")` in streamable_http_manager — tearing down the session
+# and surfacing to the client as -32001 "Request timed out", even though the
+# render itself completed and the artifact was written + indexed.
+#
+# fastmcp 3.4.2 / mcp 1.27.1 do NOT guard this (Context.report_progress and
+# Context.log call session.send_* -> _write_stream.send() directly), so the
+# guard has to live here. Catching these (a) keeps the still-running tool
+# call alive to finish writing the image, and (b) downgrades the lost-write
+# to a debug line rather than an ERROR-level crash. `list_recent_generations`
+# is then how the caller recovers the URL the timed-out response dropped.
+try:  # anyio is a hard transitive dep of fastmcp/mcp; import defensively anyway.
+    import anyio as _anyio
+
+    _CLOSED_STREAM_ERRORS: tuple[type[BaseException], ...] = (
+        _anyio.ClosedResourceError,
+        _anyio.BrokenResourceError,
+    )
+except Exception:  # pragma: no cover — anyio always present in practice
+    _CLOSED_STREAM_ERRORS = ()
+
+
 async def _progress(ctx: Context | None, progress: float, total: float, message: str) -> None:
     """Report progress over the MCP channel when a Context is present.
 
@@ -137,21 +166,35 @@ async def _progress(ctx: Context | None, progress: float, total: float, message:
     and look hung to the client without this. No-op when ctx is None (e.g.
     direct unit-test calls), and best-effort: a progress/log failure never
     aborts generation.
+
+    Closed/broken-stream writes (a timed-out streamable-HTTP session, CDI-1253)
+    are swallowed at debug specifically — they must NOT bubble up and tear the
+    session down, because the render is still running and the artifact will be
+    written + indexed (recoverable via `list_recent_generations`).
     """
     if ctx is None:
         return
     try:
         await ctx.report_progress(progress=progress, total=total, message=message)
+    except _CLOSED_STREAM_ERRORS:  # pragma: no cover — session closed mid-render
+        logger.debug("ctx.report_progress: session stream closed; ignoring", exc_info=True)
     except Exception:  # pragma: no cover — telemetry must never break generation
         logger.debug("ctx.report_progress failed", exc_info=True)
 
 
 async def _info(ctx: Context | None, message: str) -> None:
-    """Emit an info-level log over the MCP channel when a Context is present."""
+    """Emit an info-level log over the MCP channel when a Context is present.
+
+    Guards the same closed/broken-stream case as :func:`_progress` (CDI-1253):
+    a ``ctx.info`` write to a timed-out session must not crash the still-running
+    tool call.
+    """
     if ctx is None:
         return
     try:
         await ctx.info(message)
+    except _CLOSED_STREAM_ERRORS:  # pragma: no cover — session closed mid-render
+        logger.debug("ctx.info: session stream closed; ignoring", exc_info=True)
     except Exception:  # pragma: no cover — telemetry must never break generation
         logger.debug("ctx.info failed", exc_info=True)
 
@@ -1105,6 +1148,91 @@ async def list_models() -> ModelsResult:
         "identity_packs": identity_packs,
         "diagram_capable": ["openai", "gemini"],
         "diagram_formats": ["flow", "sequence", "state"],
+    }
+
+
+@mcp.tool(
+    annotations={
+        "title": "List Recent Generations",
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+async def list_recent_generations(
+    limit: int = 20,
+    offset: int = 0,
+    brand: BrandContext | None = None,
+) -> RecentGenerationsResult:
+    """[image] List the most recently generated images (newest first).
+
+    Reads the on-disk artifact index (the same sidecar metadata the gallery
+    serves) under the image storage directory and returns each artifact's
+    public ``hosted_url`` plus metadata (timestamp, dimensions, brand, model,
+    cost, and the stored prompt).
+
+    Recovery use-case: ``generate_image`` / ``generate_diagram`` renders take
+    30-80s. If the streamable-HTTP session times out mid-render, the image is
+    still written + indexed server-side but the caller never receives the URL.
+    This tool surfaces those completed-but-orphaned artifacts so the hosted
+    URL is recoverable without re-running (and re-paying for) the generation.
+
+    Does NOT call any provider and incurs no cost — it only reads local
+    metadata. An empty result (``total == 0``) is a clean response, not an
+    error.
+
+    Args:
+        limit: Max artifacts to return (1-500). Clamped into range; values
+               below 1 yield an empty page (with the full ``total`` still
+               reported). Defaults to 20.
+        offset: Number of (filtered, newest-first) artifacts to skip before
+                the page. Defaults to 0.
+        brand: Optional brand filter. Active brands: ``casey``, ``yorizon``.
+               Legacy variants are normalised to their stored directory, so
+               e.g. ``casey-berlin`` also matches the ``casey-berlin/`` dir.
+               When omitted, artifacts across all brands are returned.
+    """
+    from mcp_bildsprache.brands import normalize_brand
+    from mcp_bildsprache.gallery.index import GalleryIndex
+
+    # Build a fresh index off the live storage dir. This is the same cheap
+    # filesystem walk the gallery runs on every reindex tick, so it always
+    # reflects artifacts written since the gallery's last timer tick —
+    # including a render whose response was lost to a session timeout.
+    index = GalleryIndex(
+        data_dir=Path(settings.image_storage_path),
+        public_base_url=settings.image_domain,
+    )
+    index.refresh()
+
+    # Match the caller's brand against stored directory names. New artifacts
+    # land under the normalized brand dir (e.g. 'casey'); legacy directories
+    # ('casey-berlin', 'cdit') are matched verbatim. Include both the raw and
+    # normalized keys so either form resolves.
+    brand_filter: list[str] | None = None
+    if brand:
+        candidates = {brand, normalize_brand(brand)}
+        brand_filter = [b for b in candidates if b]
+
+    total, entries = index.filter_and_sort(
+        brand=brand_filter,
+        sort="created_desc",
+        limit=limit,
+        offset=offset,
+    )
+
+    generations = [e.to_public_dict() for e in entries]
+    # Effective (clamped) page size, mirroring GalleryIndex.filter_and_sort.
+    effective_limit = max(0, min(limit, 500))
+    effective_offset = max(0, offset)
+
+    return {
+        "generations": generations,
+        "total": total,
+        "returned": len(generations),
+        "limit": effective_limit,
+        "offset": effective_offset,
+        "brand": brand,
     }
 
 

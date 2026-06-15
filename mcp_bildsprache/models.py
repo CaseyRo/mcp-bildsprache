@@ -153,6 +153,53 @@ class GeneratePromptResult(BaseModel):
     )
 
 
+class RecentGeneration(BaseModel):
+    """One previously generated artifact surfaced by
+    :func:`list_recent_generations`.
+
+    Sourced from the on-disk sidecar index (the same data the gallery
+    serves), so a render that completed server-side but whose
+    streamable-HTTP response was lost to a session timeout is still
+    recoverable here by its ``hosted_url``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    hosted_url: str = Field(description="Public URL of the processed WebP image.")
+    path: str = Field(description="Storage path relative to the image data dir (POSIX separators).")
+    brand: str = Field(description="Top-level brand directory (e.g. 'casey', 'yorizon').")
+    prompt: str = Field(description="Stored prompt text for the generation (may be empty for legacy sidecars).")
+    model: str = Field(default="", description="Provider model id that produced the image.")
+    cost_estimate: str = Field(default="", description="Stored cost estimate string for the generation.")
+    width: int = Field(default=0, description="Image width in pixels (0 when unknown).")
+    height: int = Field(default=0, description="Image height in pixels (0 when unknown).")
+    platform: Optional[str] = Field(default=None, description="Target platform stored at generation time, if any.")
+    file_size: int = Field(default=0, description="File size of the WebP in bytes (0 when unknown).")
+    created_at: str = Field(description="ISO-8601 timestamp the artifact was generated (or file mtime fallback).")
+
+
+class RecentGenerationsResult(BaseModel):
+    """Structured result of :func:`list_recent_generations`.
+
+    ``generations`` is the most-recent-first page of artifacts. ``total``
+    is the count after the optional brand filter but before pagination, so
+    a caller can tell whether more remain beyond ``limit``/``offset``. An
+    empty ``generations`` list (with ``total == 0``) is the clean, non-error
+    response for "nothing matched" — never an exception.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    generations: list[RecentGeneration] = Field(
+        default_factory=list, description="Matching artifacts, newest first."
+    )
+    total: int = Field(default=0, description="Total matches after filtering, before limit/offset.")
+    returned: int = Field(default=0, description="Number of entries in this page (len of generations).")
+    limit: int = Field(default=0, description="Effective page size applied (after clamping).")
+    offset: int = Field(default=0, description="Offset applied into the filtered set.")
+    brand: Optional[str] = Field(default=None, description="Brand filter applied, if any.")
+
+
 class ProviderInfo(BaseModel):
     """One active provider entry advertised by :func:`list_models`."""
 
