@@ -119,6 +119,10 @@ class TestRouteModel:
     def test_route_model_gpt_image_2(self):
         assert route_model(model_hint="gpt-image-2") == "openai"
 
+    def test_route_model_gpt_image_1_5(self):
+        # GPT Image 1.5 (high) — added in the model lineup refresh (CDI-1264).
+        assert route_model(model_hint="gpt-image-1.5") == "openai"
+
     def test_route_model_gpt_image_1_mini(self):
         assert route_model(model_hint="gpt-image-1-mini") == "openai"
 
@@ -154,6 +158,9 @@ class TestRouteModelDisabledProviders:
             route_model(model_hint="flux-2-max")
 
     def test_flux_kontext_pro_hint_raises(self):
+        # flux-kontext-pro was dropped (model lineup refresh, CDI-1264), but a
+        # legacy caller could still send the hint — the "flux" prefix must
+        # still yield the clean FLUX-disabled message, not a cryptic error.
         with pytest.raises(ProviderTemporarilyDisabled):
             route_model(model_hint="flux-kontext-pro")
 

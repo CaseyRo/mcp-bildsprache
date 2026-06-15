@@ -66,8 +66,10 @@ Model = Literal[
     # Disabled but accepted at the API boundary so the dispatcher can
     # raise ProviderTemporarilyDisabled with a clear migration message.
     # Removing them from the Literal would surface as a cryptic Pydantic
-    # ValidationError instead.
-    "flux", "flux-2-max", "flux-2-pro", "flux-kontext-pro", "flux-pro-1.1",
+    # ValidationError instead. (flux-kontext-pro dropped — model lineup
+    # refresh, CDI-1264; any other flux-* hint still maps to the FLUX
+    # disabled-message via the "flux" prefix in route_model.)
+    "flux", "flux-2-max", "flux-2-pro", "flux-pro-1.1",
     "recraft",
 ]
 Register = Literal["personal", "professional"]
@@ -435,10 +437,13 @@ Choosing a tool:
 - `generate_image` — the full raster pipeline. One call resolves identity +
   brand preset + provider routing + sizing + storage + cost attribution.
   Use for social/blog/OG/proposal imagery. Default provider: OpenAI
-  gpt-image-2. WRITES an artifact and incurs paid-API cost.
+  gpt-image-2; `model_hint='gpt-image-1.5'` picks the GPT Image 1.5 (high)
+  quality sibling (same image params). WRITES an artifact and incurs
+  paid-API cost.
 - `generate_diagram` — flow / sequence / state diagrams from free-text or a
   Mermaid source (flowchart/graph, sequenceDiagram, stateDiagram only).
-  Default provider: Gemini Nano Banana Pro (best in-image text). WRITES an
+  Default provider: Gemini Nano Banana Pro (`gemini-3-pro-image-preview` —
+  top editing/control + 4K brand graphics, best in-image text). WRITES an
   artifact and incurs paid-API cost.
 - `generate_prompt` — engineer the brand-injected prompt WITHOUT calling a
   provider or spending money. Use to preview or for manual generation.
@@ -569,9 +574,10 @@ async def generate_image(
                   workshop voice). Defaults to ``professional`` for casey
                   when omitted.
         model: Force a specific model. Active hints: ``openai``,
-                ``gpt-image-2``, ``gpt-image-1-mini``, ``gemini``. Disabled
-                hints (``flux``, ``recraft``, ``flux-*``) raise
-                PROVIDER_TEMPORARILY_DISABLED with a migration message.
+                ``gpt-image-2``, ``gpt-image-1.5`` (the GPT Image 1.5 (high)
+                quality sibling — same image params), ``gpt-image-1-mini``,
+                ``gemini``. Disabled hints (``flux``, ``recraft``, ``flux-*``)
+                raise PROVIDER_TEMPORARILY_DISABLED with a migration message.
         platform: Target platform (linkedin-post, blog-hero, etc.) for auto-sizing.
         dimensions: Explicit dimensions as 'WxH' (e.g., '1200x1200'). Overrides platform sizing.
         mood: Emotional register for the image (e.g., 'contemplative', 'energetic').
@@ -1095,6 +1101,16 @@ async def generate_diagram(
             if model_id and model_id.startswith("gpt-image"):
                 kwargs["model"] = model_id
             return await provider_fn(enhanced_prompt, w, h, **kwargs)
+        if provider_key == "gemini":
+            # Diagrams default to Nano Banana Pro (top editing/control + 4K
+            # brand graphics). The "nano-banana-pro" hint maps to the same id;
+            # generate_gemini puts it first and keeps the flash model as the
+            # fast fallback (model lineup refresh, CDI-1264).
+            if model_id is None or model_id in ("gemini", "nano-banana-pro"):
+                kwargs["model"] = "gemini-3-pro-image-preview"
+            elif model_id.startswith("gemini-"):
+                kwargs["model"] = model_id
+            return await provider_fn(enhanced_prompt, w, h, **kwargs)
         return await provider_fn(enhanced_prompt, w, h, **kwargs)
 
     # Cost-confirmation gate (defensive elicit) before the paid render.
@@ -1376,17 +1392,27 @@ async def list_models() -> ModelsResult:
     available = []
 
     if settings.openai_api_key.get_secret_value():
+        # gpt-image-1.5 (high) sits alongside gpt-image-2 as a quality sibling
+        # (model lineup refresh, CDI-1264) — same image params (size/quality
+        # tiers), selectable via model_hint="gpt-image-1.5".
+        openai_models = [
+            settings.openai_image_model,
+            "gpt-image-1.5",
+            settings.openai_image_model_draft,
+        ]
+        # De-dupe while preserving order (in case the configured model is one
+        # of the siblings already listed).
+        seen: set[str] = set()
+        openai_models = [m for m in openai_models if not (m in seen or seen.add(m))]
         available.append({
             "id": "openai",
-            "name": "OpenAI gpt-image-2",
-            "models": [
-                settings.openai_image_model,
-                settings.openai_image_model_draft,
-            ],
+            "name": "OpenAI gpt-image",
+            "models": openai_models,
             "default": settings.openai_image_model,
             "best_for": (
                 "Default raster path. Strong typography in-image, "
-                "sibling-series consistency, reference image support."
+                "sibling-series consistency, reference image support. "
+                "gpt-image-1.5 (high) is the quality sibling of gpt-image-2."
             ),
             "cost": "$0.006–$0.211/image (quality-dependent)",
             "rate_limit": "Tier 1: 5 IPM / 100K TPM (sequential dispatch)",
@@ -1398,15 +1424,17 @@ async def list_models() -> ModelsResult:
             "id": "gemini",
             "name": "Gemini Nano Banana",
             "models": [
+                "gemini-3-pro-image-preview",
                 "gemini-3.1-flash-image-preview",
-                "gemini-2.5-flash-image",
             ],
+            "default": "gemini-3-pro-image-preview",
             "best_for": (
-                "Diagram path (default for generate_diagram). Best in-image "
-                "text legibility, 'thinking' pre-render, native 4K. Also "
-                "the raster fallback when OpenAI is unavailable."
+                "Diagram path (default for generate_diagram → Nano Banana Pro: "
+                "top editing/control + 4K brand graphics, best in-image text "
+                "legibility, 'thinking' pre-render). Nano Banana 2 (flash) is "
+                "the fast raster fallback when OpenAI is unavailable."
             ),
-            "cost": "~$0.039/image (flat-rate flash tier)",
+            "cost": "~$0.067/image (flash) – ~$0.24/image (Pro, 4K)",
             "status": "available",
         })
 

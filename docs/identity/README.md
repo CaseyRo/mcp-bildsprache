@@ -67,10 +67,11 @@ for the life of the container. Edit → restart to pick up changes.
 
 - WebP or JPEG, roughly 200–500 KB each (they are uploaded to the provider on
   every call that uses them).
-- Square-ish or portrait orientation works best for kontext-pro; extreme
-  aspect ratios are collaged sub-optimally.
+- Square-ish or portrait orientation works best for the single-input FLUX
+  reference path; extreme aspect ratios are collaged sub-optimally.
 - Keep the per-slot `files` list short (1–2 images). The first file wins for
-  single-input providers like `flux-kontext-pro`.
+  single-input providers like `flux-2-pro` (the FLUX reference model after
+  `flux-kontext-pro` was dropped — model lineup refresh, CDI-1264).
 
 ## Safe degradation
 

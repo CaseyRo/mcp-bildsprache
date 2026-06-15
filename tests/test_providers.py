@@ -63,15 +63,17 @@ class TestBflProvider:
 
 
 class TestBflReferences:
+    # flux-kontext-pro was dropped (model lineup refresh, CDI-1264). The
+    # reference-bearing FLUX path is now flux-2-pro (image_prompt) only.
     @pytest.mark.anyio
-    async def test_single_ref_routes_to_kontext_pro(self, httpx_mock):
+    async def test_single_ref_routes_to_flux_2_pro(self, httpx_mock):
         import base64 as b64mod
         import json as _json
 
         from mcp_bildsprache.providers.bfl import generate_bfl
 
         httpx_mock.add_response(
-            url="https://api.bfl.ai/v1/flux-kontext-pro",
+            url="https://api.bfl.ai/v1/flux-2-pro",
             json={"id": "task-ref-1"},
         )
         httpx_mock.add_response(
@@ -96,17 +98,17 @@ class TestBflReferences:
                 "ref-bearing", 512, 512, reference_images=[ref_png]
             )
 
-        # First outbound request must hit flux-kontext-pro with input_image set.
+        # First outbound request must hit flux-2-pro with image_prompt set.
         submit = httpx_mock.get_requests()[0]
-        assert submit.url.path.endswith("/flux-kontext-pro")
+        assert submit.url.path.endswith("/flux-2-pro")
         body = _json.loads(submit.content)
-        assert "input_image" in body
-        assert isinstance(body["input_image"], str)
+        assert "image_prompt" in body
+        assert isinstance(body["image_prompt"], str)
         # round-trips through base64
-        assert b64mod.b64decode(body["input_image"])
+        assert b64mod.b64decode(body["image_prompt"])
 
-        assert result.model == "flux-kontext-pro"
-        assert result.cost_estimate == "$0.04"
+        assert result.model == "flux-2-pro"
+        assert result.cost_estimate == "$0.03"
 
     @pytest.mark.anyio
     async def test_multi_ref_is_collaged_and_submitted(self, httpx_mock, caplog):
@@ -118,7 +120,7 @@ class TestBflReferences:
         from mcp_bildsprache.providers.bfl import generate_bfl
 
         httpx_mock.add_response(
-            url="https://api.bfl.ai/v1/flux-kontext-pro",
+            url="https://api.bfl.ai/v1/flux-2-pro",
             json={"id": "task-collage"},
         )
         httpx_mock.add_response(
@@ -146,73 +148,23 @@ class TestBflReferences:
         assert any("bfl_collage" in r.message and "sources=3" in r.message
                    for r in caplog.records)
 
-        # input_image on the submitted payload is a valid PNG (our collage output).
+        # image_prompt on the submitted payload is a valid PNG (our collage output).
         submit = httpx_mock.get_requests()[0]
         body = _json.loads(submit.content)
-        raw = b64mod.b64decode(body["input_image"])
+        raw = b64mod.b64decode(body["image_prompt"])
         img = Image.open(_io.BytesIO(raw))
         assert img.format == "PNG"
         # 3 × 1024-high sources would exceed 1 MP so the collage is downscaled.
-        # Just assert it is within the kontext-pro budget.
+        # Just assert it is within the flux-2-pro reference budget.
         mp_out = (img.width * img.height) / 1_000_000
         assert mp_out <= 1.01
-
-    @pytest.mark.anyio
-    async def test_kontext_pro_failure_falls_to_flux_2_pro_image_prompt(self, httpx_mock):
-        import json as _json
-
-        from mcp_bildsprache.providers.bfl import generate_bfl
-
-        # kontext-pro errors on submit.
-        httpx_mock.add_response(
-            url="https://api.bfl.ai/v1/flux-kontext-pro",
-            status_code=500,
-        )
-        # flux-2-pro succeeds.
-        httpx_mock.add_response(
-            url="https://api.bfl.ai/v1/flux-2-pro",
-            json={"id": "task-2pro"},
-        )
-        httpx_mock.add_response(
-            url="https://api.bfl.ai/v1/get_result?id=task-2pro",
-            json={"status": "Ready", "result": {"sample": "https://example.com/out.jpg"}},
-        )
-        httpx_mock.add_response(
-            url="https://example.com/out.jpg",
-            content=_fake_jpeg_bytes(),
-            headers={"content-type": "image/jpeg"},
-        )
-
-        ref = _fake_png_bytes(64, 64)
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setenv("BFL_API_KEY", "test-key")
-            from mcp_bildsprache.config import Settings
-            test_settings = Settings()
-            mp.setattr("mcp_bildsprache.providers.bfl.settings", test_settings)
-
-            result = await generate_bfl("fallback", 512, 512, reference_images=[ref])
-
-        # Assert flux-2-pro was called with the image_prompt field.
-        reqs = httpx_mock.get_requests()
-        pro_req = next(r for r in reqs if r.url.path.endswith("/flux-2-pro"))
-        body = _json.loads(pro_req.content)
-        assert "image_prompt" in body
-
-        # Cost/model reflect what actually succeeded.
-        assert result.model == "flux-2-pro"
-        assert result.cost_estimate == "$0.03"
 
     @pytest.mark.anyio
     async def test_flux_2_max_never_called_with_refs(self, httpx_mock):
         from mcp_bildsprache.providers.bfl import generate_bfl
 
-        # Both reference-capable endpoints fail — we expect the function to
-        # raise WITHOUT ever trying flux-2-max (text-only).
-        httpx_mock.add_response(
-            url="https://api.bfl.ai/v1/flux-kontext-pro",
-            status_code=500,
-        )
+        # The reference-capable endpoint fails — we expect the function to
+        # raise WITHOUT ever trying flux-2-max (text-only) or flux-pro-1.1.
         httpx_mock.add_response(
             url="https://api.bfl.ai/v1/flux-2-pro",
             status_code=500,
@@ -232,6 +184,7 @@ class TestBflReferences:
         urls = [str(r.url) for r in httpx_mock.get_requests()]
         assert not any("/flux-2-max" in u for u in urls)
         assert not any("/flux-pro-1.1" in u for u in urls)
+        assert not any("/flux-kontext-pro" in u for u in urls)
 
 
 class TestGeminiProvider:
@@ -271,6 +224,50 @@ class TestGeminiProvider:
         assert result.image_data == png_bytes
         assert result.mime_type == "image/png"
         assert "gemini" in result.model
+
+    def test_gemini_models_catalog(self):
+        # Model lineup refresh (CDI-1264): Nano Banana 2 (flash) + Nano Banana
+        # Pro; gemini-2.5-flash-image dropped.
+        from mcp_bildsprache.providers.gemini import GEMINI_MODELS
+
+        assert "gemini-3.1-flash-image-preview" in GEMINI_MODELS
+        assert "gemini-3-pro-image-preview" in GEMINI_MODELS
+        assert "gemini-2.5-flash-image" not in GEMINI_MODELS
+
+    @pytest.mark.anyio
+    async def test_model_override_prefers_requested_model(self, httpx_mock):
+        """Passing model= puts that model first in the attempt order — the
+        diagram path uses this to prefer Nano Banana Pro (CDI-1264)."""
+        import base64 as b64mod
+
+        from mcp_bildsprache.providers.gemini import generate_gemini
+
+        png_bytes = _fake_png_bytes()
+        b64 = b64mod.b64encode(png_bytes).decode()
+        httpx_mock.add_response(
+            json={
+                "candidates": [{
+                    "content": {"parts": [{
+                        "inlineData": {"data": b64, "mimeType": "image/png"}
+                    }]}
+                }]
+            },
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            test_settings = Settings()
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", test_settings)
+
+            result = await generate_gemini(
+                "test prompt", 1536, 1024, model="gemini-3-pro-image-preview"
+            )
+
+        # First (and only) request hits Nano Banana Pro.
+        request = httpx_mock.get_request()
+        assert "gemini-3-pro-image-preview" in str(request.url)
+        assert result.model == "gemini-3-pro-image-preview"
 
 
 class TestGeminiReferences:
@@ -407,6 +404,12 @@ class TestGeminiSizeConfig:
         assert _image_size_for(1264, 800) == "1K"
         assert _image_size_for(1536, 1024) == "2K"
         assert _image_size_for(2048, 2048) == "2K"
+        # Flash model caps at 2K even for very large targets (portal budget).
+        assert _image_size_for(4096, 4096, "gemini-3.1-flash-image-preview") == "2K"
+        # Nano Banana Pro is the 4K brand-graphics model (CDI-1264): targets
+        # beyond ~2K are allowed to render at 4K.
+        assert _image_size_for(4096, 4096, "gemini-3-pro-image-preview") == "4K"
+        assert _image_size_for(2048, 2048, "gemini-3-pro-image-preview") == "2K"
 
     @pytest.mark.anyio
     async def test_payload_sets_image_config_for_gemini3(self, httpx_mock):
@@ -451,8 +454,10 @@ class TestGeminiSizeConfig:
         assert "Target dimensions" not in body["contents"][0]["parts"][0]["text"]
 
     @pytest.mark.anyio
-    async def test_image_size_omitted_for_25_flash(self, httpx_mock):
-        """2.5-flash is fixed ~1024px; imageSize must not be sent to it."""
+    async def test_flash_failure_falls_to_nano_banana_pro(self, httpx_mock):
+        """gemini-2.5-flash-image was dropped (CDI-1264). When the flash model
+        fails, the fallback is Nano Banana Pro (gemini-3-pro-image-preview),
+        which still sets imageSize (it is a 3.x model)."""
         import base64 as b64mod
         import json as _json
 
@@ -460,7 +465,7 @@ class TestGeminiSizeConfig:
 
         png_bytes = _fake_png_bytes()
         b64 = b64mod.b64encode(png_bytes).decode()
-        # First model (3.1) fails, second model (2.5-flash) succeeds.
+        # First model (3.1 flash) fails, second model (3-pro) succeeds.
         httpx_mock.add_response(status_code=503)
         httpx_mock.add_response(
             json={
@@ -480,18 +485,21 @@ class TestGeminiSizeConfig:
 
             result = await generate_gemini("test prompt", 1536, 1024)
 
-        assert result.model == "gemini-2.5-flash-image"
-        # The second request is the 2.5-flash call.
+        assert result.model == "gemini-3-pro-image-preview"
+        # The second request is the Nano Banana Pro call.
         last = httpx_mock.get_requests()[-1]
-        assert "gemini-2.5-flash-image" in str(last.url)
+        assert "gemini-3-pro-image-preview" in str(last.url)
         image_cfg = _json.loads(last.content)["generationConfig"]["imageConfig"]
         assert "aspectRatio" in image_cfg
-        assert "imageSize" not in image_cfg
+        # 3.x models set imageSize; 1536px long edge → 2K tier.
+        assert image_cfg["imageSize"] == "2K"
 
 
 class TestRecraftProvider:
     @pytest.mark.anyio
     async def test_returns_provider_result(self, httpx_mock):
+        import json as _json
+
         from mcp_bildsprache.providers.recraft import generate_recraft
 
         png_bytes = _fake_png_bytes()
@@ -517,7 +525,11 @@ class TestRecraftProvider:
         assert isinstance(result, ProviderResult)
         assert result.image_data == png_bytes
         assert result.mime_type == "image/png"
-        assert "recraft" in result.model
+        # Recraft V4.1 upgrade (model lineup refresh, CDI-1264): display id and
+        # the outbound API slug both move to the v4.1 model.
+        assert result.model == "recraft-v4.1"
+        submit = httpx_mock.get_requests()[0]
+        assert _json.loads(submit.content)["model"] == "recraftv4_1"
 
 
 class TestRecraftReferences:
@@ -565,7 +577,7 @@ class TestRecraftReferences:
         assert "image_prompt" not in body
         assert "reference_images" not in body
 
-        assert result.model == "recraft-v4"
+        assert result.model == "recraft-v4.1"
 
 
 class TestBflProviderErrors:

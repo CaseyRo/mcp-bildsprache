@@ -1,4 +1,12 @@
-"""Recraft V4 image generation provider."""
+"""Recraft V4.1 image generation provider.
+
+Recraft is the native-SVG/vector + design-language specialist. This provider
+calls the raster ``/v1/images/generations`` endpoint with the ``recraftv4_1``
+model (model lineup refresh, CDI-1264 — upgraded from ``recraftv4``). The
+vector slug is ``recraftv4_1_vector`` (see ``RECRAFT_VECTOR_MODEL``); the SVG
+path is not wired in this server today, so the constant is kept here as the
+single source of truth for the vector model id when vector output is enabled.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +20,11 @@ from mcp_bildsprache.types import ProviderResult
 logger = logging.getLogger(__name__)
 
 RECRAFT_API_URL = "https://external.api.recraft.ai/v1/images/generations"
+
+# Recraft V4.1 model slugs (model lineup refresh, CDI-1264). The raster model
+# is the API default; the vector slug is preserved for the native-SVG path.
+RECRAFT_RASTER_MODEL = "recraftv4_1"
+RECRAFT_VECTOR_MODEL = "recraftv4_1_vector"
 
 # Recraft only supports specific sizes — snap to nearest supported
 SUPPORTED_SIZES = [
@@ -41,9 +54,9 @@ async def generate_recraft(
     height: int = 1024,
     reference_images: list[bytes] | None = None,
 ) -> ProviderResult:
-    """Generate an image using Recraft V4.
+    """Generate an image using Recraft V4.1.
 
-    V4 does not support named style presets — style is prompt-driven.
+    V4.1 does not support named style presets — style is prompt-driven.
     Downloads the image and returns a ProviderResult with raw bytes.
 
     Recraft's text-to-image endpoint does not accept reference images;
@@ -70,7 +83,7 @@ async def generate_recraft(
 
     payload = {
         "prompt": prompt,
-        "model": "recraftv4",
+        "model": RECRAFT_RASTER_MODEL,
         "size": _snap_size(width, height),
     }
 
@@ -97,6 +110,6 @@ async def generate_recraft(
     return ProviderResult(
         image_data=img_response.content,
         mime_type=content_type,
-        model="recraft-v4",
+        model="recraft-v4.1",
         cost_estimate="$0.04",
     )
