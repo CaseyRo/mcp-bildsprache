@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.44] - 2026-06-30
+
+- fix(deps): bump joserfc from 1.6.5 to 1.6.7 (#33)
+
+
 ## [0.3.42] - 2026-06-15
 
 - feat(bildsprache): async dispatch+poll for image generation (CDI-1266)
