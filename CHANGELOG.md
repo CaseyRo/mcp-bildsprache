@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.47] - 2026-06-30
+
+- refactor(providers): delete dead FLUX/Recraft + no-op FALLBACKS (simplify-render-async Phase 2)
+
+
 ## [0.3.46] - 2026-06-30
 
 - fix(render): drop inline-wait 40s->20s + poll ceiling 55s->20s under the CF portal budget (CDI-1266)
