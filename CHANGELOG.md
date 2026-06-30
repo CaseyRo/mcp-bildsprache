@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.46] - 2026-06-30
+
+- fix(render): drop inline-wait 40s->20s + poll ceiling 55s->20s under the CF portal budget (CDI-1266)
+
+
 ## [0.3.44] - 2026-06-30
 
 - fix(deps): bump joserfc from 1.6.5 to 1.6.7 (#33)
