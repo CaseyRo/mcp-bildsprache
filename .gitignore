@@ -9,3 +9,6 @@ dist/
 build/
 .DS_Store
 .claude/worktrees/
+
+# Agent working memory — never commit (leaks infra/creds)
+.claude/agent-memory/
