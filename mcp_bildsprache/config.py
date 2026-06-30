@@ -18,20 +18,8 @@ class Settings(BaseSettings):
     # Active providers (May 2026 brand collapse): openai (raster default,
     # also accepts gpt-image-* hints) and gemini (diagram default for
     # generate_diagram).
-    #
-    # Disabled providers retained as recognised env vars: bfl, recraft.
-    # Their dispatcher routing raises ProviderTemporarilyDisabled — modules
-    # remain in-tree so re-enabling is a one-PR dispatcher swap. Setting
-    # these env vars is safe (they're loaded but unused); leaving them
-    # unset is also safe (the modules don't import them at module level).
     gemini_api_key: SecretStr = SecretStr("")
-    bfl_api_key: SecretStr = SecretStr("")        # disabled, see note above
-    recraft_api_key: SecretStr = SecretStr("")    # disabled, see note above
     openai_api_key: SecretStr = SecretStr("")
-
-    # Recraft tier (free vs pro — affects license warnings).
-    # Inert while Recraft is disabled at the dispatcher.
-    recraft_tier: Literal["free", "pro"] = "free"
 
     # OpenAI image-generation model IDs (config so we can pin a snapshot like
     # gpt-image-2-2026-04-21 without a code change).
@@ -107,10 +95,6 @@ class Settings(BaseSettings):
         missing = []
         if not self.gemini_api_key.get_secret_value():
             missing.append("GEMINI_API_KEY")
-        if not self.bfl_api_key.get_secret_value():
-            missing.append("BFL_API_KEY")
-        if not self.recraft_api_key.get_secret_value():
-            missing.append("RECRAFT_API_KEY")
         if not self.openai_api_key.get_secret_value():
             missing.append("OPENAI_API_KEY")
         if missing:

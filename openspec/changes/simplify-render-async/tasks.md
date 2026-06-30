@@ -8,9 +8,9 @@
 
 ## 2. Delete dead code
 
-- [ ] 2.1 Remove `providers/bfl.py`, `providers/recraft.py`, their tests, `DISABLED_PROVIDERS`, and the disabled-provider branch in `route_model`
-- [ ] 2.2 Remove `FALLBACKS`, `REFERENCE_FALLBACKS`, and the cross-provider fallback try/except (always-`None`, never fires)
-- [ ] 2.3 Merge `_render_image_job` + `_render_diagram_job` into one parametrized `_render_job`
+- [x] 2.1 Remove `providers/bfl.py`, `providers/recraft.py`, their tests. (KEPT `route_model`'s flux/recraft→`ProviderTemporarilyDisabled` rejection + `DISABLED_PROVIDERS` + the `Literal` entries on purpose — removing them changes the public schema / forces a portal catalog re-sync for ~15 lines.)
+- [x] 2.2 Remove `FALLBACKS`, `REFERENCE_FALLBACKS`, and the cross-provider fallback try/except (always-`None`, never fired). Net −833 lines.
+- [ ] 2.3 Merge `_render_image_job` + `_render_diagram_job` into one parametrized `_render_job` — DEFERRED: behavioral-refactor risk for ~150 lines; reassess after 2.1/2.2.
 
 ## 3. FastMCP-native tasks (design-gated)
 

@@ -28,15 +28,13 @@ def _fake_provider_result(model: str = "gpt-image-2") -> ProviderResult:
 def mock_provider():
     """Mock all providers to return a fake ProviderResult.
 
-    Post-May-2026 collapse: openai + gemini are the active dispatch
-    targets. flux/recraft modules stay in-tree but unreachable; we still
-    mock them so any accidental dispatch doesn't hit the network.
+    Post-May-2026 collapse: openai + gemini are the active dispatch targets.
     """
     result = _fake_provider_result()
     mock = AsyncMock(return_value=result)
     with patch(
         "mcp_bildsprache.server.PROVIDERS",
-        {"openai": mock, "gemini": mock, "flux": mock, "recraft": mock},
+        {"openai": mock, "gemini": mock},
     ):
         yield mock
 
@@ -462,8 +460,6 @@ class TestOtherTools:
             from pydantic import SecretStr
             s.openai_api_key = SecretStr("fake-key")
             s.gemini_api_key = SecretStr("fake-key")
-            s.bfl_api_key = SecretStr("fake-key")
-            s.recraft_api_key = SecretStr("fake-key")
             s.openai_image_model = "gpt-image-2"
             s.openai_image_model_draft = "gpt-image-1-mini"
 
@@ -840,7 +836,7 @@ class TestAsyncDispatchPoll:
 
         with patch(
             "mcp_bildsprache.server.PROVIDERS",
-            {"openai": slow, "gemini": slow, "flux": slow, "recraft": slow},
+            {"openai": slow, "gemini": slow},
         ), patch("mcp_bildsprache.server.settings") as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
@@ -903,7 +899,7 @@ class TestAsyncDispatchPoll:
 
         with patch(
             "mcp_bildsprache.server.PROVIDERS",
-            {"openai": slow, "gemini": slow, "flux": slow, "recraft": slow},
+            {"openai": slow, "gemini": slow},
         ), patch("mcp_bildsprache.server.settings") as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
@@ -951,7 +947,7 @@ class TestAsyncDispatchPoll:
 
         with patch(
             "mcp_bildsprache.server.PROVIDERS",
-            {"openai": slow, "gemini": slow, "flux": slow, "recraft": slow},
+            {"openai": slow, "gemini": slow},
         ), patch("mcp_bildsprache.server.settings") as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True

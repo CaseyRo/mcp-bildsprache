@@ -31,10 +31,8 @@ from mcp_bildsprache.presets import (
     get_preset,
     route_model,
 )
-from mcp_bildsprache.providers.bfl import generate_bfl
 from mcp_bildsprache.providers.gemini import generate_gemini
 from mcp_bildsprache.providers.openai import generate_openai
-from mcp_bildsprache.providers.recraft import generate_recraft
 from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
 from mcp_bildsprache.attribution import (
     build_attribution,
@@ -101,35 +99,6 @@ Platform = Literal[
 PROVIDERS = {
     "gemini": generate_gemini,
     "openai": generate_openai,
-    # FLUX (BFL) and Recraft modules remain in-tree so re-enabling is a
-    # one-PR dispatcher swap. The dispatcher does not route to them per
-    # the May 2026 brand-collapse change.
-    "flux": generate_bfl,
-    "recraft": generate_recraft,
-}
-
-# Cross-provider fallback chain. Per the May 2026 brand-collapse follow-up
-# (2026-05-09), the openai → gemini fallback for raster generation has
-# been REMOVED at the user's explicit direction: "It MUST work, no
-# fallback! fix before continuing testing." The previous fallback masked
-# real OpenAI bugs (e.g. wrong size constraints for gpt-image-1-mini)
-# behind silent Gemini handoffs, so callers got Gemini-quality output
-# while thinking they had gpt-image-2.
-#
-# The only fallback that remains is for the diagram path: if Gemini
-# fails on generate_diagram, we let the call fail rather than swap to
-# OpenAI silently — the caller can opt into OpenAI explicitly via
-# model_hint="openai" when sibling-series consistency matters.
-FALLBACKS: dict[str, str | None] = {
-    "openai": None,
-    "gemini": None,
-}
-
-# REFERENCE_FALLBACKS kept for callers (tests) that import it; same
-# no-fallback policy applies.
-REFERENCE_FALLBACKS: dict[str, str | None] = {
-    "openai": None,
-    "gemini": None,
 }
 
 
@@ -396,7 +365,6 @@ async def _render_image_job(
     resolved_slot_names: list[str],
     include_dogs: bool | None,
     est_cost: float | None,
-    fallback_map: dict[str, str | None],
 ) -> dict[str, Any]:
     """Run the raster render+store pipeline and return the result dict.
 
@@ -418,8 +386,6 @@ async def _render_image_job(
             if model_id and model_id.startswith("gpt-image"):
                 kwargs["model"] = model_id
             return await provider_fn(enhanced_prompt, w, h, **kwargs)
-        if provider_key == "flux" and model_id:
-            return await provider_fn(enhanced_prompt, w, h, model=model_id, **kwargs)
         return await provider_fn(enhanced_prompt, w, h, **kwargs)
 
     fallback_used = False
@@ -428,46 +394,23 @@ async def _render_image_job(
     try:
         provider_result = await _call_provider(selected_provider, specific_model)
     except Exception as e:
-        logger.warning("Provider %s failed: %s — trying fallback", selected_provider, e)
-        fallback_provider = fallback_map.get(selected_provider)
-        if not fallback_provider:
-            outcome, category = _classify_generation_error(e)
-            _record_generation_attempt(
-                request_id=job_id,
-                outcome=outcome,
-                model=specific_model or selected_provider,
-                provider=selected_provider,
-                brand=context,
-                width=w,
-                height=h,
-                latency_ms=latency_ms(),
-                error_category=category,
-                error_message=str(e),
-                cost_estimate_eur=est_cost,
-            )
-            registry.mark_error(job_id, error=str(e), error_category=category)
-            raise
-        try:
-            provider_result = await _call_provider(fallback_provider)
-        except Exception as e2:
-            outcome, category = _classify_generation_error(e2)
-            _record_generation_attempt(
-                request_id=job_id,
-                outcome=outcome,
-                model=fallback_provider,
-                provider=fallback_provider,
-                brand=context,
-                width=w,
-                height=h,
-                latency_ms=latency_ms(),
-                error_category=category,
-                error_message=str(e2),
-                cost_estimate_eur=est_cost,
-            )
-            registry.mark_error(job_id, error=str(e2), error_category=category)
-            raise
-        fallback_used = True
-        original_model = selected_provider
+        logger.warning("Provider %s failed: %s", selected_provider, e)
+        outcome, category = _classify_generation_error(e)
+        _record_generation_attempt(
+            request_id=job_id,
+            outcome=outcome,
+            model=specific_model or selected_provider,
+            provider=selected_provider,
+            brand=context,
+            width=w,
+            height=h,
+            latency_ms=latency_ms(),
+            error_category=category,
+            error_message=str(e),
+            cost_estimate_eur=est_cost,
+        )
+        registry.mark_error(job_id, error=str(e), error_category=category)
+        raise
 
     if used_identity_pack:
         logger.info(
@@ -635,48 +578,23 @@ async def _render_diagram_job(
     try:
         provider_result = await _call_provider(selected_provider, specific_model)
     except Exception as e:
-        logger.warning(
-            "Diagram provider %s failed: %s — trying fallback", selected_provider, e
+        logger.warning("Diagram provider %s failed: %s", selected_provider, e)
+        outcome, category = _classify_generation_error(e)
+        _record_generation_attempt(
+            request_id=job_id,
+            outcome=outcome,
+            model=specific_model or selected_provider,
+            provider=selected_provider,
+            brand="casey",
+            width=w,
+            height=h,
+            latency_ms=latency_ms(),
+            error_category=category,
+            error_message=str(e),
+            cost_estimate_eur=est_cost,
         )
-        fallback_provider = FALLBACKS.get(selected_provider)
-        if not fallback_provider:
-            outcome, category = _classify_generation_error(e)
-            _record_generation_attempt(
-                request_id=job_id,
-                outcome=outcome,
-                model=specific_model or selected_provider,
-                provider=selected_provider,
-                brand="casey",
-                width=w,
-                height=h,
-                latency_ms=latency_ms(),
-                error_category=category,
-                error_message=str(e),
-                cost_estimate_eur=est_cost,
-            )
-            registry.mark_error(job_id, error=str(e), error_category=category)
-            raise
-        try:
-            provider_result = await _call_provider(fallback_provider)
-        except Exception as e2:
-            outcome, category = _classify_generation_error(e2)
-            _record_generation_attempt(
-                request_id=job_id,
-                outcome=outcome,
-                model=fallback_provider,
-                provider=fallback_provider,
-                brand="casey",
-                width=w,
-                height=h,
-                latency_ms=latency_ms(),
-                error_category=category,
-                error_message=str(e2),
-                cost_estimate_eur=est_cost,
-            )
-            registry.mark_error(job_id, error=str(e2), error_category=category)
-            raise
-        fallback_used = True
-        original_provider = selected_provider
+        registry.mark_error(job_id, error=str(e), error_category=category)
+        raise
 
     attribution = build_attribution(
         provider_result=provider_result,
@@ -1209,8 +1127,6 @@ async def generate_image(
         parts.append(f"Mood/emotional register: {mood}")
     enhanced_prompt = "\n".join(parts)
 
-    fallback_map = REFERENCE_FALLBACKS if has_refs else FALLBACKS
-
     # Cost-confirmation gate (defensive elicit). Surface the estimated EUR
     # cost — the same compute_cost math the post-call ai_attribution uses —
     # before spending money. No-op for clients without elicitation support.
@@ -1281,7 +1197,6 @@ async def generate_image(
             resolved_slot_names=resolved_slots,
             include_dogs=include_dogs,
             est_cost=est_cost,
-            fallback_map=fallback_map,
         )
 
     # On a fast failure _dispatch_and_maybe_wait re-raises the render's exact

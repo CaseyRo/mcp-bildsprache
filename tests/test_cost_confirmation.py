@@ -40,7 +40,7 @@ def mock_provider():
     mock = AsyncMock(return_value=result)
     with patch(
         "mcp_bildsprache.server.PROVIDERS",
-        {"openai": mock, "gemini": mock, "flux": mock, "recraft": mock},
+        {"openai": mock, "gemini": mock},
     ):
         yield mock
 

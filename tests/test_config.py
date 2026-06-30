@@ -28,8 +28,7 @@ class TestMissingApiKeysWarning:
                 Settings()
         assert "Missing API keys" in caplog.text
         assert "GEMINI_API_KEY" in caplog.text
-        assert "BFL_API_KEY" in caplog.text
-        assert "RECRAFT_API_KEY" in caplog.text
+        assert "OPENAI_API_KEY" in caplog.text
 
 
 class TestEnsureApiKey:
