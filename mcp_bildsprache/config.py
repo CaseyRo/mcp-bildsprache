@@ -67,10 +67,14 @@ class Settings(BaseSettings):
     # status: "pending"} handle the caller polls with get_image_result. Set well
     # under the ~60s portal limit. `background=True` (per call) or
     # `sync_wait_seconds=0` forces an immediate job-handle return.
-    sync_wait_seconds: int = 40
+    # ponytail: must stay UNDER the CF portal's real request budget (the old 40
+    # assumed ~60s and never delivered — renders -32001'd). Returning the {job_id}
+    # handle at 20s gets it back before the portal severs; the client then polls
+    # get_image_result. Tune via SYNC_WAIT_SECONDS once the portal's exact cap is known.
+    sync_wait_seconds: int = 20
     # Long-poll ceiling for get_image_result(wait_seconds=...). Caller-supplied
     # wait_seconds is clamped to this so a poll can never exceed the portal budget.
-    poll_wait_max_seconds: int = 55
+    poll_wait_max_seconds: int = 20
 
     # Identity packs (personal likeness reference images; private volume)
     identity_dir: Path = Path("/data/identity")
