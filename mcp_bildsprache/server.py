@@ -503,14 +503,16 @@ async def _render_image_job(
         result["fallback_reason"] = "provider_error"
 
     try:
-        processed_bytes = process_image(
+        processed_bytes = await asyncio.to_thread(
+            process_image,
             provider_result=provider_result,
             target_width=w,
             target_height=h,
             prompt=enhanced_prompt,
             brand_context=context,
         )
-        hosted_url = store_image(
+        hosted_url = await asyncio.to_thread(
+            store_image,
             image_data=processed_bytes,
             prompt=enhanced_prompt,
             width=w,
@@ -543,7 +545,8 @@ async def _render_image_job(
 
     if raw:
         try:
-            raw_url = store_raw_image(
+            raw_url = await asyncio.to_thread(
+                store_raw_image,
                 image_data=provider_result.image_data,
                 mime_type=provider_result.mime_type,
                 processed_file_path=result["hosted_url"],
@@ -703,14 +706,16 @@ async def _render_diagram_job(
         result["fallback_reason"] = "provider_error"
 
     try:
-        processed_bytes = process_image(
+        processed_bytes = await asyncio.to_thread(
+            process_image,
             provider_result=provider_result,
             target_width=w,
             target_height=h,
             prompt=enhanced_prompt,
             brand_context="casey",
         )
-        hosted_url = store_image(
+        hosted_url = await asyncio.to_thread(
+            store_image,
             image_data=processed_bytes,
             prompt=enhanced_prompt,
             width=w,
@@ -1745,7 +1750,9 @@ async def list_recent_generations(
         data_dir=Path(settings.image_storage_path),
         public_base_url=settings.image_domain,
     )
-    index.refresh()
+    # Offload the per-call filesystem walk so the recovery tool itself can't
+    # freeze the event loop (CDI-1312).
+    await asyncio.to_thread(index.refresh)
 
     # Match the caller's brand against stored directory names. New artifacts
     # land under the normalized brand dir (e.g. 'casey'); legacy directories

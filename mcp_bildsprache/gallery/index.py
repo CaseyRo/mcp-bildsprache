@@ -345,8 +345,10 @@ async def _reindex_loop(index: GalleryIndex, interval_s: int) -> None:
         except asyncio.CancelledError:
             return
         try:
-            # Refresh is quick; run on the event-loop thread.
-            index.refresh()
+            # Offload the filesystem walk to a thread: a large gallery scan
+            # must never freeze the event loop and starve MCP requests
+            # (CDI-1312).
+            await asyncio.to_thread(index.refresh)
         except asyncio.CancelledError:
             return
         except Exception as e:  # pragma: no cover - defensive
