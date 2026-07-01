@@ -127,20 +127,22 @@ class TestDispatchAndCapture:
         assert payload["model"] == "gpt-image-2"
         assert r.model == "gpt-image-2"
 
-    async def test_draft_flag_routes_to_mini(self, httpx_mock: HTTPXMock) -> None:
+    async def test_draft_is_pinned_to_gpt_image_2(self, httpx_mock: HTTPXMock) -> None:
         import json as _json
 
+        # draft is now a no-op — everything pins to gpt-image-2 (mini errored 0/6 overnight).
         httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
         r = await generate_openai("prompt", draft=True)
         request = httpx_mock.get_request()
         assert request is not None
-        assert _json.loads(request.read())["model"] == "gpt-image-1-mini"
-        assert r.model == "gpt-image-1-mini"
+        assert _json.loads(request.read())["model"] == "gpt-image-2"
+        assert r.model == "gpt-image-2"
 
-    async def test_explicit_model_override(self, httpx_mock: HTTPXMock) -> None:
+    async def test_model_hint_is_ignored(self, httpx_mock: HTTPXMock) -> None:
+        # model hints (incl. gpt-image-1.5, which errored 0/3) are ignored; always gpt-image-2.
         httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
         r = await generate_openai("prompt", model="gpt-image-1.5")
-        assert r.model == "gpt-image-1.5"
+        assert r.model == "gpt-image-2"
 
     async def test_usage_captured(self, httpx_mock: HTTPXMock) -> None:
         usage = {
@@ -469,20 +471,4 @@ class TestMiniSizeSnapping:
         ) == (1200, 1200)
 
 
-class TestMiniSizeInRequest:
-    async def test_mini_payload_includes_legal_size(self, httpx_mock: HTTPXMock) -> None:
-        from mcp_bildsprache.config import settings
-
-        httpx_mock.add_response(
-            url="https://api.openai.com/v1/images/generations",
-            json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}),
-        )
-        # draft=True routes to the mini model.
-        await generate_openai("prompt", width=1200, height=1200, draft=True)
-        request = httpx_mock.get_request()
-        assert request is not None
-        import json
-        payload = json.loads(request.read().decode())
-        assert payload["model"] == settings.openai_image_model_draft
-        # Must be one of the legal mini sizes — not 1200x1200 (which OpenAI rejects).
-        assert payload["size"] in ("1024x1024", "1024x1536", "1536x1024")
+# (TestMiniSizeInRequest removed: mini is no longer reachable — pinned to gpt-image-2.)

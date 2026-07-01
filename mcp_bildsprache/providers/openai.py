@@ -242,11 +242,12 @@ async def generate_openai(
     # Strip params gpt-image-2 rejects.
     _strip_unsupported_kwargs(kwargs)
 
-    # Resolve model based on draft flag; allow caller override via kwargs.
-    model = kwargs.pop(
-        "model",
-        settings.openai_image_model_draft if draft else settings.openai_image_model,
-    )
+    # ponytail: pinned to gpt-image-2 only. The draft tier (gpt-image-1-mini) and
+    # the gpt-image-1.5 hint both returned provider_errors overnight (0/6, 0/3),
+    # while gpt-image-2 was 100% (17/17). Ignore `draft` and any `model` hint.
+    # Tune via OPENAI_IMAGE_MODEL if a variant ever becomes reliable again.
+    kwargs.pop("model", None)
+    model = settings.openai_image_model
 
     snapped_w, snapped_h = _validate_and_snap_size(width, height, model=model)
     size = f"{snapped_w}x{snapped_h}"
