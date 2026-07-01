@@ -32,6 +32,11 @@ services:
       - KEYCLOAK_AUDIENCE=${KEYCLOAK_AUDIENCE:-mcp-bildsprache}
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-bildsprache}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      # Cloudflare Access (Managed OAuth on mcp-bs) — accept the team-signed
+      # Cf-Access-Jwt-Assertion so GitHub-gated clients auth without a bmcp_ key.
+      # Not secret (JWTs are signature-validated); override via Komodo if the app changes.
+      - CF_ACCESS_TEAM_DOMAIN=${CF_ACCESS_TEAM_DOMAIN:-cdit-dev.cloudflareaccess.com}
+      - CF_ACCESS_AUD=${CF_ACCESS_AUD:-21722a544fe406fa158299588b79220d5039753da1c1e93a478969b84f85aec6}
       - ENABLE_HOSTING=${ENABLE_HOSTING:-false}
       - IMAGE_DOMAIN=${IMAGE_DOMAIN:-https://img.cdit-works.de}
       - FASTMCP_HOME=/data/fastmcp

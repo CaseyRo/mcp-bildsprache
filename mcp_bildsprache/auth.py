@@ -48,6 +48,29 @@ class BearerTokenVerifier(TokenVerifier):
         )
 
 
+def build_cf_access_verifier(team_domain: str, aud: str) -> TokenVerifier | None:
+    """A JWTVerifier for Cloudflare Access identity JWTs.
+
+    CF Access injects a team-signed JWT (``Cf-Access-Jwt-Assertion``, ``aud`` =
+    the Access application tag) on every request that passed its policy.
+    Validating it against the team JWKS lets a GitHub-gated OAuth client (e.g.
+    Claude Desktop via Managed OAuth) authenticate without a ``bmcp_`` bearer.
+    The signature check is what makes this safe on the non-Access hostname too:
+    a forged ``Cf-Access-Jwt-Assertion`` fails JWKS validation. Returns None if
+    unconfigured (no behavior change).
+    """
+    if not (team_domain and aud):
+        return None
+
+    from fastmcp.server.auth.providers.jwt import JWTVerifier
+
+    return JWTVerifier(
+        jwks_uri=f"https://{team_domain}/cdn-cgi/access/certs",
+        issuer=f"https://{team_domain}",
+        audience=aud,
+    )
+
+
 def create_auth(
     api_key: str | None,
     keycloak_issuer: str,
@@ -55,6 +78,7 @@ def create_auth(
     keycloak_client_id: str,
     keycloak_client_secret: str,
     base_url: str,
+    cf_verifier: TokenVerifier | None = None,
     **_kwargs,
 ) -> MultiAuth:
     """Create the authentication provider.
@@ -86,6 +110,8 @@ def create_auth(
     verifiers: list[TokenVerifier] = []
     if api_key:
         verifiers.append(BearerTokenVerifier(api_key))
+    if cf_verifier:
+        verifiers.append(cf_verifier)
 
     return MultiAuth(server=oidc_auth, verifiers=verifiers)
 

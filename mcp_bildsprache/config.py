@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     keycloak_client_id: str = "mcp-bildsprache"
     keycloak_client_secret: SecretStr = SecretStr("")
 
+    # Cloudflare Access (Managed OAuth on the mcp-bs hostname). When both are set,
+    # a request carrying a valid Cf-Access-Jwt-Assertion (team-signed, aud-matched)
+    # authenticates without a bmcp_ bearer — the portal-less GitHub-gated path.
+    cf_access_team_domain: str = ""  # e.g. cdit-dev.cloudflareaccess.com
+    cf_access_aud: str = ""          # the Access application AUD tag
+
     # Gallery (Tailnet-only browse/download UI)
     gallery_enabled: bool = True
     gallery_reindex_interval_seconds: int = 300

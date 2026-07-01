@@ -12,7 +12,11 @@ from mcp.types import Icon
 
 from pathlib import Path
 
-from mcp_bildsprache.auth import BearerTokenVerifier, create_auth
+from mcp_bildsprache.auth import (
+    BearerTokenVerifier,
+    build_cf_access_verifier,
+    create_auth,
+)
 from mcp_bildsprache.config import settings
 from mcp_bildsprache.identity import (
     get_loaded_packs,
@@ -846,6 +850,10 @@ def _build_auth():
             "Refusing to start an unauthenticated server."
         )
 
+    cf_verifier = build_cf_access_verifier(
+        settings.cf_access_team_domain, settings.cf_access_aud
+    )
+
     keycloak_secret = settings.keycloak_client_secret.get_secret_value()
     if keycloak_secret:
         return create_auth(
@@ -855,8 +863,13 @@ def _build_auth():
             keycloak_client_id=settings.keycloak_client_id,
             keycloak_client_secret=keycloak_secret,
             base_url=settings.base_url,
+            cf_verifier=cf_verifier,
         )
 
+    if cf_verifier:
+        from fastmcp.server.auth import MultiAuth
+
+        return MultiAuth(verifiers=[BearerTokenVerifier(api_key), cf_verifier])
     return BearerTokenVerifier(api_key)
 
 
@@ -2080,6 +2093,42 @@ def mermaid_to_diagram(
     )
 
 
+class CfAccessHeaderMiddleware:
+    """Expose the CF Access identity JWT as an ``Authorization`` bearer.
+
+    Cloudflare Access puts the team-signed JWT in ``Cf-Access-Jwt-Assertion``,
+    not ``Authorization`` — so the JWTVerifier never sees it. When that header
+    is present (and the request isn't already a ``bmcp_`` bearer), copy it into
+    ``Authorization: Bearer <jwt>`` so the verifier can validate it. No crypto
+    here — the JWTVerifier does the signature/aud/exp check.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            headers = scope["headers"]
+            cf = next((v for k, v in headers if k == b"cf-access-jwt-assertion"), None)
+            authz = next((v for k, v in headers if k == b"authorization"), b"")
+            if cf and not authz.startswith(b"Bearer bmcp_"):
+                headers = [(k, v) for k, v in headers if k != b"authorization"]
+                headers.append((b"authorization", b"Bearer " + cf))
+                scope = {**scope, "headers": headers}
+        await self.app(scope, receive, send)
+
+
+def _install_cf_access_middleware(app) -> None:
+    """Enable the CF Access header bridge when Managed OAuth is configured."""
+    if settings.cf_access_team_domain and settings.cf_access_aud:
+        app.add_middleware(CfAccessHeaderMiddleware)
+        logger.info(
+            "CF Access auth enabled (team=%s aud=%s…)",
+            settings.cf_access_team_domain,
+            settings.cf_access_aud[:8],
+        )
+
+
 def _mount_static_files(app) -> None:
     """Mount the image storage directory for static serving."""
     import mimetypes
@@ -2229,6 +2278,7 @@ def main() -> None:
         # stateless_http=True → eliminates orphaned SSE sessions after CF
         # kills idle connections. See openspec mcp-stateless-transport.
         app = mcp.http_app(transport="streamable-http", stateless_http=True)
+        _install_cf_access_middleware(app)
         _mount_gallery(app)
         _mount_static_files(app)
         import uvicorn
