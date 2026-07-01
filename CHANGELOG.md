@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.49] - 2026-07-01
+
+- feat(auth): accept Cloudflare Access identity JWT (portal-less GitHub path)
+
+
 ## [0.3.48] - 2026-07-01
 
 - fix(openai): pin raster to gpt-image-2 only
