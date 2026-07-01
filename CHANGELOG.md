@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.48] - 2026-07-01
+
+- fix(openai): pin raster to gpt-image-2 only
+
+
 ## [0.3.47] - 2026-06-30
 
 - refactor(providers): delete dead FLUX/Recraft + no-op FALLBACKS (simplify-render-async Phase 2)
