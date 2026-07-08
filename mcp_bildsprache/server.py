@@ -2277,7 +2277,15 @@ def main() -> None:
     if settings.transport == "http":
         # stateless_http=True → eliminates orphaned SSE sessions after CF
         # kills idle connections. See openspec mcp-stateless-transport.
-        app = mcp.http_app(transport="streamable-http", stateless_http=True)
+        # fastmcp 3.4.3 added DNS-rebinding Host validation → 421 for any non-localhost
+        # Host header. This server is fronted by img.cdit-works.de + mcp-bildsprache.cdit-dev.de
+        # behind Cloudflare Access + Tailscale (the edge already gates access), so allow all
+        # Hosts. Matches the stolperstein fleet pattern (allowed_hosts="*").
+        app = mcp.http_app(
+            transport="streamable-http",
+            stateless_http=True,
+            allowed_hosts=["*"],
+        )
         _install_cf_access_middleware(app)
         _mount_gallery(app)
         _mount_static_files(app)
