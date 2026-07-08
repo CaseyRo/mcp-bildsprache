@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.51] - 2026-07-08
+
+- openspec: reference consolidated cdit store
+
+
 ## [0.3.49] - 2026-07-01
 
 - feat(auth): accept Cloudflare Access identity JWT (portal-less GitHub path)
