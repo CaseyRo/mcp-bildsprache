@@ -1,5 +1,7 @@
 # Changelog
 
+Versions are git tags (`vX.Y.Z`) from now on; this file is no longer updated per release.
+
 ## [0.3.53] - 2026-09-27
 
 - ci: add blocking PR/push test workflow and MCP protocol test (#41)

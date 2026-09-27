@@ -51,3 +51,12 @@ async def test_a_tool_call_round_trips():
         result = await client.call_tool("get_visual_presets", {"context": "casey"})
     assert result.content, "get_visual_presets returned no content"
     assert '"casey"' in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_writes_one_usage_line(capsys):
+    async with Client(mcp) as client:
+        await client.call_tool("get_visual_presets", {"context": "casey"})
+    lines = [ln for ln in capsys.readouterr().err.splitlines() if '"mcp_usage"' in ln]
+    assert len(lines) == 1
+    assert all(s in lines[0] for s in ('"bildsprache"', '"get_visual_presets"', '"outcome": "ok"'))
