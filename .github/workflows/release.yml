@@ -33,7 +33,7 @@ jobs:
       - name: Install and test
         run: |
           uv sync
-          uv run pytest -x || echo "Tests skipped or failed"
+          uv run pytest -x
 
       - name: Security audit (pip-audit)
         run: uvx pip-audit
@@ -56,7 +56,8 @@ jobs:
           ENTRY="## [$NEW] - $DATE\n\n$COMMITS\n"
           sed -i "/^# Changelog/a\\\\n${ENTRY}" CHANGELOG.md 2>/dev/null || true
 
-          git add pyproject.toml CHANGELOG.md
+          uv lock
+          git add pyproject.toml CHANGELOG.md uv.lock
           git commit -m "chore(release): v${NEW} [skip ci]"
           git tag "v${NEW}"
           echo "version=${NEW}" >> "$GITHUB_OUTPUT"
