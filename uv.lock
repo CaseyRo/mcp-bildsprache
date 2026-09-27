@@ -648,7 +648,7 @@ wheels = [
 
 [[package]]
 name = "mcp-bildsprache"
-version = "0.3.52"
+version = "0.3.53"
 source = { editable = "." }
 dependencies = [
     { name = "authlib" },

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.53] - 2026-09-27
+
+- ci: add blocking PR/push test workflow and MCP protocol test (#41)
+
+
 ## [0.3.51] - 2026-07-08
 
 - openspec: reference consolidated cdit store
