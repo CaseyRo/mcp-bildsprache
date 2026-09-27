@@ -12,6 +12,7 @@ from mcp.types import Icon
 
 from pathlib import Path
 
+from mcp_bildsprache.usage import UsageMiddleware
 from mcp_bildsprache.auth import (
     BearerTokenVerifier,
     build_cf_access_verifier,
@@ -931,6 +932,7 @@ mcp = FastMCP(
         ),
     ],
 )
+mcp.add_middleware(UsageMiddleware("bildsprache"))
 
 
 # --- Health endpoint -----------------------------------------------------
