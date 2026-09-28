@@ -344,3 +344,12 @@ class TestEstimateCostEur:
         est = estimate_cost_eur(provider="openai", model="totally-made-up", width=1024, height=1024)
         assert est is not None
         assert est > 0
+
+
+@pytest.mark.parametrize("model", ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+def test_gpt_image_25_priced_like_gpt_image_2(model):
+    from mcp_bildsprache.attribution import _get_cost_table, estimate_cost_eur
+
+    assert model in _get_cost_table()["openai"]
+    base = estimate_cost_eur(provider="openai", model="gpt-image-2", width=1024, height=1024)
+    assert estimate_cost_eur(provider="openai", model=model, width=1024, height=1024) == base

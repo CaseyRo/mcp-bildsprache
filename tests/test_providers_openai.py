@@ -88,7 +88,7 @@ class TestParamGuards:
             await generate_openai("x", background="rainbow")
 
     async def test_unsupported_quality_rejected(self) -> None:
-        with pytest.raises(ValueError, match="unsupported quality"):
+        with pytest.raises(ValueError, match="does not support quality"):
             await generate_openai("x", quality="ultra")
 
     async def test_streaming_rejected(self) -> None:
@@ -127,11 +127,39 @@ class TestDispatchAndCapture:
         assert payload["model"] == "gpt-image-2"
         assert r.model == "gpt-image-2"
 
-    async def test_model_hint_is_ignored(self, httpx_mock: HTTPXMock) -> None:
-        # model hints (incl. gpt-image-1.5, which errored 0/3) are ignored; always gpt-image-2.
+    @pytest.mark.parametrize("model", ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+    async def test_model_is_sent_and_reported(self, httpx_mock: HTTPXMock, model: str) -> None:
+        import json as _json
+
         httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
-        r = await generate_openai("prompt", model="gpt-image-1.5")
-        assert r.model == "gpt-image-2"
+        r = await generate_openai("prompt", model=model)
+        assert _json.loads(httpx_mock.get_request().read())["model"] == model
+        assert r.model == model
+
+
+class TestGptImage25Options:
+    async def test_xhigh_quality_and_transparent_sent(self, httpx_mock: HTTPXMock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
+        await generate_openai(
+            "x", model="gpt-image-2.5-flare", quality="xhigh", background="transparent"
+        )
+        payload = _json.loads(httpx_mock.get_request().read())
+        assert (payload["quality"], payload["background"], payload["output_format"]) == (
+            "xhigh", "transparent", "webp"
+        )
+
+    @pytest.mark.parametrize("quality", ["xhigh", "max"])
+    async def test_gpt_image_2_rejects_25_quality(self, quality: str) -> None:
+        with pytest.raises(ValueError, match="does not support quality"):
+            await generate_openai("x", model="gpt-image-2", quality=quality)
+
+    async def test_transparent_needs_png_or_webp(self) -> None:
+        with pytest.raises(ValueError, match="png or webp"):
+            await generate_openai(
+                "x", model="gpt-image-2.5-sunburst", background="transparent", output_format="jpeg"
+            )
 
     async def test_usage_captured(self, httpx_mock: HTTPXMock) -> None:
         usage = {

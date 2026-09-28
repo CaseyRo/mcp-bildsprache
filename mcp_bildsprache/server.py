@@ -40,6 +40,8 @@ from mcp_bildsprache.presets import (
     route_model,
 )
 from mcp_bildsprache.providers.gemini import generate_gemini
+from mcp_bildsprache.providers.openai import IMAGE_MODELS as OPENAI_MODELS
+from mcp_bildsprache.providers.openai import check_options as check_openai_options
 from mcp_bildsprache.providers.openai import generate_openai
 from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
 from mcp_bildsprache.attribution import (
@@ -71,9 +73,9 @@ logger = logging.getLogger(__name__)
 
 _ELICIT_TIMEOUT_S = 5
 
-# Hints the stale Cloudflare portal catalog may still send. The OpenAI provider
-# pins gpt-image-2 and ignored them anyway; accept and drop them so an old
-# catalog never turns into a validation error.
+# Hints the stale Cloudflare portal catalog may still send. They were never
+# rendered; map them to gpt-image-2 so an old catalog never turns into a
+# validation error.
 _RETIRED_MODEL_HINTS = frozenset({"gpt-image-1.5", "gpt-image-1-mini"})
 
 
@@ -87,6 +89,7 @@ def _drop_retired_hint(v: Any) -> Any:
 _ModelLiteral = Literal[
     # Active providers (May 2026 brand collapse).
     "gemini", "openai", "gpt-image-2",
+    "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
     # Disabled but accepted at the API boundary so the dispatcher can
     # raise ProviderTemporarilyDisabled with a clear migration message.
     # Removing them from the Literal would surface as a cryptic Pydantic
@@ -98,6 +101,7 @@ _ModelLiteral = Literal[
 ]
 Model = Annotated[_ModelLiteral, BeforeValidator(_drop_retired_hint)]
 Register = Literal["personal", "professional"]
+Quality = Literal["low", "medium", "high", "xhigh", "max", "auto"]
 BrandContext = Literal[
     # Active brands (May 2026 brand collapse).
     "casey", "yorizon",
@@ -300,11 +304,11 @@ def _render_clock() -> Callable[[], int]:
 def _model_used(provider: str, hint: str | None) -> str | None:
     """The model that will actually render, for the cost estimate and ledger.
 
-    OpenAI ignores model hints and pins ``settings.openai_image_model``
-    (providers/openai.py), so record that rather than the hint.
+    OpenAI renders a hint from ``OPENAI_MODELS`` as given; anything else
+    (``openai``, a retired hint, none) means ``settings.openai_image_model``.
     """
     if provider == "openai":
-        return settings.openai_image_model
+        return hint if hint in OPENAI_MODELS else settings.openai_image_model
     return hint if hint and hint != provider else None
 
 
@@ -332,6 +336,7 @@ async def _render_image_job(
     resolved_slot_names: list[str],
     include_dogs: bool | None,
     est_cost: float | None,
+    openai_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the raster render+store pipeline and return the result dict.
 
@@ -351,7 +356,7 @@ async def _render_image_job(
         if provider_key == "openai":
             if model_id and model_id.startswith("gpt-image"):
                 kwargs["model"] = model_id
-            return await provider_fn(enhanced_prompt, w, h, **kwargs)
+            kwargs.update(openai_options or {})
         return await provider_fn(enhanced_prompt, w, h, **kwargs)
 
     fallback_used = False
@@ -827,8 +832,8 @@ Choosing a tool:
 - `generate_image` — the full raster pipeline. One call resolves identity +
   brand preset + provider routing + sizing + storage + cost attribution.
   Use for social/blog/OG/proposal imagery. Default provider: OpenAI
-  gpt-image-2 (the only OpenAI model it renders with). WRITES an artifact
-  and incurs paid-API cost.
+  gpt-image-2; pick `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst`
+  (premium, editing) via `model`. WRITES an artifact and incurs paid-API cost.
 - `generate_diagram` — flow / sequence / state diagrams from free-text or a
   Mermaid source (flowchart/graph, sequenceDiagram, stateDiagram only).
   Default provider: Gemini Nano Banana Pro (`gemini-3-pro-image-preview` —
@@ -847,7 +852,7 @@ crisper/schematic) and `yorizon` (fully isolated, no casey palette tokens).
 Legacy keys (casey-berlin, cdit-works, @cdit, storykeep, nah, ...) normalise
 to `casey`.
 
-Routing split: raster -> OpenAI gpt-image-2 (Gemini is the cross-provider
+Routing split: raster -> OpenAI gpt-image-2 by default (Gemini is the cross-provider
 fallback target but is NOT auto-selected for raster); diagram -> Gemini Nano
 Banana Pro (OpenAI available via model_hint='openai').
 
@@ -959,6 +964,8 @@ async def generate_image(
     reference_images: list[bytes] | None = None,
     include_dogs: bool | None = None,
     background: bool = False,
+    quality: Quality | None = None,
+    transparent: bool = False,
     ctx: Context | None = None,
 ) -> GenerateImageResult:
     """[image] Generate a brand-aware image.
@@ -984,7 +991,7 @@ async def generate_image(
     ``hosted_url`` as a failure.
 
     Active providers (May 2026 brand collapse): OpenAI gpt-image-2 (default
-    raster) and Gemini Nano Banana (fallback). FLUX and Recraft are
+    raster; gpt-image-2.5-flare / -sunburst selectable) and Gemini Nano Banana. FLUX and Recraft are
     temporarily disabled at the dispatcher; hinting at them raises
     ``PROVIDER_TEMPORARILY_DISABLED``.
 
@@ -998,10 +1005,11 @@ async def generate_image(
                   manifesto-adjacent) or ``professional`` (verification,
                   workshop voice). Defaults to ``professional`` for casey
                   when omitted.
-        model: Force a provider. Active hints: ``openai`` / ``gpt-image-2``
-                (the same thing: OpenAI always renders gpt-image-2) and
-                ``gemini``. Disabled hints (``flux``, ``recraft``, ``flux-*``)
-                raise PROVIDER_TEMPORARILY_DISABLED with a migration message.
+        model: Force a provider/model. OpenAI: ``gpt-image-2`` (default),
+                ``gpt-image-2.5-flare`` (fast everyday), ``gpt-image-2.5-sunburst``
+                (premium, editing precision); ``openai`` = the server default.
+                ``gemini`` for Nano Banana. Disabled hints (``flux``,
+                ``recraft``, ``flux-*``) raise PROVIDER_TEMPORARILY_DISABLED.
         platform: Target platform (linkedin-post, blog-hero, etc.) for auto-sizing.
         dimensions: Explicit dimensions as 'WxH' (e.g., '1200x1200'). Overrides platform sizing.
         mood: Emotional register for the image (e.g., 'contemplative', 'energetic').
@@ -1018,6 +1026,10 @@ async def generate_image(
                 ``sync_wait_seconds=0``). Use when you'd rather poll than hold the
                 connection open. Default false (hybrid: inline-wait then fall back
                 to a job handle).
+        quality: OpenAI only. ``low`` / ``medium`` / ``high`` / ``auto``, plus
+                ``xhigh`` / ``max`` on the 2.5 models. Default ``medium``.
+        transparent: OpenAI 2.5 models only: render on a transparent
+                background (kept as WebP alpha).
     """
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
@@ -1059,6 +1071,17 @@ async def generate_image(
             },
         })
     specific_model = _model_used(selected_provider, model)
+    if quality is not None or transparent:
+        if selected_provider != "openai":
+            raise ValueError("quality and transparent apply to OpenAI models only")
+        check_openai_options(
+            specific_model, quality or "medium", "transparent" if transparent else "opaque"
+        )
+    openai_options: dict[str, Any] = {}
+    if quality:
+        openai_options["quality"] = quality
+    if transparent:
+        openai_options["background"] = "transparent"
 
     # Determine dimensions
     if dimensions:
@@ -1145,6 +1168,7 @@ async def generate_image(
             resolved_slot_names=resolved_slots,
             include_dogs=include_dogs,
             est_cost=est_cost,
+            openai_options=openai_options,
         )
 
     # On a fast failure _dispatch_and_maybe_wait re-raises the render's exact
@@ -1471,18 +1495,20 @@ async def list_models() -> ModelsResult:
     available = []
 
     if settings.openai_api_key.get_secret_value():
-        # The provider pins this one model at medium quality; hints are ignored.
+        # model= picks per call; OPENAI_IMAGE_MODEL is the default.
         available.append({
             "id": "openai",
             "name": "OpenAI gpt-image",
-            "models": [settings.openai_image_model],
+            "models": list(OPENAI_MODELS),
             "default": settings.openai_image_model,
             "best_for": (
                 "Default raster path. Strong typography in-image, "
                 "sibling-series consistency, reference image support. "
-                "Always renders at medium quality."
+                "gpt-image-2.5-flare is fast; gpt-image-2.5-sunburst is the "
+                "premium/editing model (both add xhigh/max quality and "
+                "transparent backgrounds). Default quality: medium."
             ),
-            "cost": "usage-based, medium quality (real figure in ai_attribution)",
+            "cost": "usage-based, same token rates for all three (real figure in ai_attribution)",
             "rate_limit": "Tier 1: 5 IPM / 100K TPM (sequential dispatch)",
             "status": "available",
         })

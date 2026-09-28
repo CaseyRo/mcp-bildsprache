@@ -1,4 +1,4 @@
-"""OpenAI GPT Image 2 provider (CDI-1014 §4).
+"""OpenAI GPT Image provider: gpt-image-2 and gpt-image-2.5-flare / -sunburst (CDI-1014 §4).
 
 Uses httpx directly (matching the pattern of the other providers) rather
 than the `openai` SDK to keep the dependency footprint small. The Images
@@ -7,16 +7,16 @@ API is stable enough that a raw POST is fine.
 Endpoint: POST https://api.openai.com/v1/images/generations
 
 Defaults:
-- model:          gpt-image-2 (configurable via OPENAI_IMAGE_MODEL)
-- quality:        medium
+- model:          per call, else OPENAI_IMAGE_MODEL (default gpt-image-2)
+- quality:        medium (2.5 models add xhigh and max)
 - output_format:  webp
 - compression:    90 (only applied for jpeg/webp)
-- background:     opaque (transparent is NOT supported on gpt-image-2)
+- background:     opaque (transparent only on the 2.5 models, png/webp output)
 - moderation:     auto
 
 Guardrails:
 - Strip input_fidelity from any caller kwargs (API rejects it for gpt-image-2).
-- Reject background="transparent" explicitly with a clear error.
+- Reject background="transparent" on gpt-image-2 with a clear error.
 - Validate size against OpenAI constraints before dispatch; snap non-
   compliant sizes to the nearest legal size. The existing post-processing
   pipeline trims to the caller's exact target size.
@@ -55,9 +55,32 @@ _MAX_RATIO = 3.0
 _MIN_PIXELS = 655_360
 _MAX_PIXELS = 8_294_400
 
-# Known-good quality presets. We default to medium and only promote to high
-# on explicit caller opt-in.
+# Models callers may pick. Size limits are the same for all three (docs,
+# 2026-09-28); the 2.5 models add xhigh/max quality and transparent backgrounds.
+IMAGE_MODELS = ("gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
 _QUALITIES = ("low", "medium", "high", "auto")
+_QUALITIES_25 = ("low", "medium", "high", "xhigh", "max", "auto")
+
+
+def is_25(model: str) -> bool:
+    return model.startswith("gpt-image-2.5")
+
+
+def check_options(model: str, quality: str, background: str, output_format: str = "webp") -> None:
+    """Raise ValueError for a quality/background the model does not accept."""
+    allowed = _QUALITIES_25 if is_25(model) else _QUALITIES
+    if quality not in allowed:
+        raise ValueError(f"openai: {model} does not support quality '{quality}' (allowed: {allowed})")
+    if background == "transparent":
+        if not is_25(model):
+            raise ValueError(
+                f"openai: {model} does not support background='transparent'. "
+                "Use gpt-image-2.5-flare or gpt-image-2.5-sunburst."
+            )
+        if output_format not in ("png", "webp"):
+            raise ValueError("openai: a transparent background needs png or webp output")
+    elif background not in ("opaque", "auto"):
+        raise ValueError(f"openai: unsupported background '{background}'")
 
 
 # Tier-1 OpenAI rate limit is 5 IPM. Serialise dispatch at the process level
@@ -183,6 +206,7 @@ async def generate_openai(
     height: int = 1024,
     *,
     reference_images: list[bytes] | None = None,
+    model: str | None = None,
     quality: str = "medium",
     output_format: str = "webp",
     output_compression: int = 90,
@@ -191,7 +215,7 @@ async def generate_openai(
     stream: bool = False,
     **kwargs: Any,
 ) -> ProviderResult:
-    """Generate an image using OpenAI gpt-image-2.
+    """Generate an image using an OpenAI GPT Image model.
 
     Args:
         prompt: Text prompt.
@@ -200,11 +224,13 @@ async def generate_openai(
             pipeline trims to the exact requested size post-download.
         reference_images: Not supported in v1 (OpenAI's edit endpoint is
             tracked as a follow-up change). Silently ignored with a log.
-        quality: "low" | "medium" | "high" | "auto". Default "medium".
+        model: One of IMAGE_MODELS; None → OPENAI_IMAGE_MODEL.
+        quality: "low" | "medium" | "high" | "auto" (+ "xhigh" | "max" on
+            the 2.5 models). Default "medium".
         output_format: "webp" (default), "png", or "jpeg".
         output_compression: 0-100. Only applied for jpeg/webp.
-        background: "opaque" | "auto". "transparent" is NOT supported on
-            gpt-image-2 and is rejected explicitly.
+        background: "opaque" | "auto" | "transparent" ("transparent" only on
+            the 2.5 models with png/webp output).
         moderation: "auto" | "low". Default "auto".
         stream: Not supported in v1 — rejected with a clear error.
 
@@ -213,8 +239,8 @@ async def generate_openai(
         OpenAI returns one), and model_version pinned to the model id used.
 
     Raises:
-        ValueError: OPENAI_API_KEY not set, invalid params, transparent
-            background, streaming requested.
+        ValueError: OPENAI_API_KEY not set, invalid params for the model,
+            streaming requested.
         OpenAISizeError: size inputs fundamentally out of bounds.
         OpenAIRateLimited: 429 after retry budget.
         httpx.HTTPStatusError: other HTTP errors propagated to caller.
@@ -226,26 +252,11 @@ async def generate_openai(
     if stream:
         raise ValueError("openai: streaming is not enabled in v1")
 
-    if background == "transparent":
-        raise ValueError(
-            "openai: gpt-image-2 does not support background='transparent'. "
-            "Use 'opaque' or 'auto'."
-        )
-    if background not in ("opaque", "auto"):
-        raise ValueError(f"openai: unsupported background '{background}'")
-
-    if quality not in _QUALITIES:
-        raise ValueError(f"openai: unsupported quality '{quality}' (allowed: {_QUALITIES})")
+    model = model or settings.openai_image_model
+    check_options(model, quality, background, output_format)
 
     # Strip params gpt-image-2 rejects.
     _strip_unsupported_kwargs(kwargs)
-
-    # ponytail: pinned to gpt-image-2 only. The draft tier (gpt-image-1-mini) and
-    # the gpt-image-1.5 hint both returned provider_errors overnight (0/6, 0/3),
-    # while gpt-image-2 was 100% (17/17). Ignore any `model` hint.
-    # Tune via OPENAI_IMAGE_MODEL if a variant ever becomes reliable again.
-    kwargs.pop("model", None)
-    model = settings.openai_image_model
 
     snapped_w, snapped_h = _validate_and_snap_size(width, height, model=model)
     size = f"{snapped_w}x{snapped_h}"
@@ -442,6 +453,8 @@ def _legacy_cost_string(model: str, usage: dict[str, Any]) -> str:
     # Published rates per 1M tokens (2026-04-24):
     rates = {
         "gpt-image-2": (8.0, 30.0),
+        "gpt-image-2.5-flare": (8.0, 30.0),
+        "gpt-image-2.5-sunburst": (8.0, 30.0),
         "gpt-image-1.5": (8.0, 32.0),
         "gpt-image-1-mini": (2.5, 8.0),
     }

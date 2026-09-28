@@ -16,8 +16,10 @@ docker compose up --build
 ## MCP Tools
 
 - `generate_image` — Full image generation with brand preset injection.
-  Default raster path: OpenAI gpt-image-2 at medium quality (the only OpenAI model it renders
-  with; the retired `gpt-image-1.5` / `gpt-image-1-mini` hints are accepted and ignored).
+  Default raster path: OpenAI gpt-image-2 at medium quality (`OPENAI_IMAGE_MODEL`). Per call,
+  `model` picks `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst` (premium/editing);
+  `quality` (`low`…`high`, `auto`; `xhigh`/`max` on 2.5) and `transparent` (2.5 only) are
+  OpenAI options. The retired `gpt-image-1.5` / `gpt-image-1-mini` hints map to gpt-image-2.
   Optional `register: 'personal' | 'professional'` for the casey brand (May 2026 brand
   collapse). Optional `reference_images: list[bytes]` forwards reference images to OpenAI
   (or auto-resolves from the brand's identity pack when `context` is set). Optional
