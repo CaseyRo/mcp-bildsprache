@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 from PIL import Image
 
 from mcp_bildsprache.storage import StorageError
@@ -170,7 +171,7 @@ class TestNoFallback:
             ss.image_domain = "https://img.cdit-works.de"
 
             from mcp_bildsprache.server import generate_image
-            with pytest.raises(RuntimeError, match="OpenAI down"):
+            with pytest.raises(ToolError, match="OpenAI down"):
                 _d(await generate_image(prompt="test no fallback", dimensions="512x512"))
 
         # Gemini must NOT have been called — no silent swap.
@@ -183,7 +184,7 @@ class TestNoFallback:
 
         with patch("mcp_bildsprache.server.settings"), \
              patch("mcp_bildsprache.server.store_image", side_effect=StorageError("disk full")):
-            with pytest.raises(StorageError, match="disk full"):
+            with pytest.raises(ToolError, match="disk full"):
                 _d(await generate_image(prompt="test storage fail", dimensions="512x512"))
 
 
@@ -239,25 +240,25 @@ class TestIdentityIntegration:
         buf = io.BytesIO()
         Image.new("RGB", (8, 8), color=(100, 100, 100)).save(buf, format="WEBP")
         (pack_dir / "casey-1.webp").write_bytes(buf.getvalue())
-        (pack_dir / "fimme-1.webp").write_bytes(buf.getvalue())
-        (pack_dir / "sien-1.webp").write_bytes(buf.getvalue())
+        (pack_dir / "dog-1-1.webp").write_bytes(buf.getvalue())
+        (pack_dir / "dog-2-1.webp").write_bytes(buf.getvalue())
 
         manifest = {
             "version": 1,
             "slots": {
                 "casey": {"files": ["casey-1.webp"], "tags": ["person"]},
-                "fimme": {"files": ["fimme-1.webp"], "tags": ["dog"]},
-                "sien":  {"files": ["sien-1.webp"],  "tags": ["dog"]},
+                "dog-1": {"files": ["dog-1-1.webp"], "tags": ["dog"]},
+                "dog-2":  {"files": ["dog-2-1.webp"],  "tags": ["dog"]},
             },
             "rules": {
                 "always_include": ["casey"],
                 "include_if_prompt_matches": {
-                    "fimme": ["walk", "morning"],
-                    "sien":  ["walk", "morning"],
+                    "dog-1": ["walk", "morning"],
+                    "dog-2":  ["walk", "morning"],
                 },
                 "exclude_if_prompt_matches": {
-                    "fimme": ["office", "meeting"],
-                    "sien":  ["office", "meeting"],
+                    "dog-1": ["office", "meeting"],
+                    "dog-2":  ["office", "meeting"],
                 },
             },
         }
@@ -304,7 +305,7 @@ class TestIdentityIntegration:
         # An INFO record with identity_resolved fields is emitted.
         rec = next(r for r in caplog.records if "identity_resolved" in r.message)
         assert "brand=@casey.berlin" in rec.message
-        assert "slots=['casey', 'fimme', 'sien']" in rec.message
+        assert "slots=['casey', 'dog-1', 'dog-2']" in rec.message
         assert "has_include_dogs_override=False" in rec.message
 
         # Cleanup — avoid leaking into other tests.
@@ -1263,7 +1264,7 @@ class TestGenerationLedgerWiring:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            with pytest.raises(RuntimeError, match="OpenAI 500 boom"):
+            with pytest.raises(ToolError, match="OpenAI 500 boom"):
                 # A retired hint must be recorded as the model that ran.
                 _d(await generate_image(
                     prompt="ledger failure", context="casey", dimensions="512x512",
@@ -1328,7 +1329,7 @@ class TestGenerationLedgerWiring:
         boom = AsyncMock(side_effect=AssertionError("provider must not be called"))
         with patch("mcp_bildsprache.server.PROVIDERS", {"openai": boom, "gemini": boom}), \
              patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"):
-            with pytest.raises(ValueError, match=match):
+            with pytest.raises(ToolError, match=match):
                 await generate_image(prompt="x", dimensions="1024x1024", **kwargs)
         boom.assert_not_called()
 
@@ -1458,8 +1459,8 @@ class TestGenerationLedgerWiring:
         from mcp_bildsprache.server import generation_stats
 
         self._point_ledger_at(tmp_path, monkeypatch)
-        stats = _d(await generation_stats(since="not-a-date"))
-        assert stats["error"]["code"] == "INVALID_SINCE"
+        with pytest.raises(ToolError, match="INVALID_SINCE"):
+            await generation_stats(since="not-a-date")
 
 
 # ---------------------------------------------------------------------------
@@ -1600,58 +1601,48 @@ class TestGenerateDiagramTool:
     async def test_flux_hint_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = _d(await generate_diagram(
-            format="flow",
-            prompt="A flow",
-            model_hint="flux",
-        ))
-
-        assert "error" in result
-        assert result["error"]["code"] == "PROVIDER_TEMPORARILY_DISABLED"
-        assert result["error"]["provider"] == "FLUX"
-        assert result["error"]["replacement"] == "gemini"  # diagram path replacement
+        with pytest.raises(ToolError, match="PROVIDER_TEMPORARILY_DISABLED") as exc:
+            await generate_diagram(format="flow", prompt="A flow", model_hint="flux")
+        assert "FLUX" in str(exc.value)
+        assert "gemini" in str(exc.value)  # diagram path replacement
 
     @pytest.mark.anyio
     async def test_no_input_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = _d(await generate_diagram(format="flow"))
-        assert "error" in result
-        assert result["error"]["code"] == "INVALID_INPUT"
+        with pytest.raises(ToolError, match="INVALID_INPUT"):
+            await generate_diagram(format="flow")
 
     @pytest.mark.anyio
     async def test_both_inputs_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = _d(await generate_diagram(
-            format="flow", prompt="text", mermaid="flowchart TD\n  A --> B"
-        ))
-        assert "error" in result
-        assert result["error"]["code"] == "INVALID_INPUT"
+        with pytest.raises(ToolError, match="INVALID_INPUT"):
+            await generate_diagram(
+                format="flow", prompt="text", mermaid="flowchart TD\n  A --> B"
+            )
 
     @pytest.mark.anyio
     async def test_unsupported_mermaid_type_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = _d(await generate_diagram(
-            format="flow",
-            mermaid="erDiagram\n  CUSTOMER ||--o{ ORDER : places",
-        ))
-        assert "error" in result
-        assert result["error"]["code"] == "MERMAID_PARSE_ERROR"
-        assert "ER diagrams" in result["error"]["message"]
+        with pytest.raises(ToolError, match="MERMAID_PARSE_ERROR") as exc:
+            await generate_diagram(
+                format="flow",
+                mermaid="erDiagram\n  CUSTOMER ||--o{ ORDER : places",
+            )
+        assert "ER diagrams" in str(exc.value)
 
     @pytest.mark.anyio
     async def test_format_mismatch_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
         # Mermaid says sequenceDiagram, format says flow.
-        result = _d(await generate_diagram(
-            format="flow",
-            mermaid="sequenceDiagram\n  A->>B: hello",
-        ))
-        assert "error" in result
-        assert result["error"]["code"] == "MERMAID_FORMAT_MISMATCH"
+        with pytest.raises(ToolError, match="MERMAID_FORMAT_MISMATCH"):
+            await generate_diagram(
+                format="flow",
+                mermaid="sequenceDiagram\n  A->>B: hello",
+            )
 
     @pytest.mark.anyio
     async def test_diagram_personal_register_default_overridable(

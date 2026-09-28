@@ -6,7 +6,7 @@ for the response shape (hosted URL, model, cost, attribution, ...).
 
 Tools return instances of these models (fastmcp 4 warns on a bare ``dict``
 against a BaseModel return type). Every model sets ``extra="allow"``, so the
-conditional / legacy extras the tools emit (``error`` blocks, ``job_id`` /
+conditional / legacy extras the tools emit (``job_id`` /
 ``status`` / ``poll_with``, ``raw_url``, ...) pass through verbatim. Models with
 a ``register_`` field serialise by alias, so the wire key stays ``register``.
 Unset optional fields now go out as explicit ``null``.
@@ -26,15 +26,14 @@ class GenerateImageResult(BaseModel):
     ``img.cdit-works.de``). ``ai_attribution`` is the JSON-Schema-validated
     provenance + EUR-cost block. Optional fields appear only in the relevant
     cases (``raw_url`` when ``raw=True``; the ``fallback_*`` trio when a
-    cross-provider fallback fired; ``error`` when a provider hint was
-    rejected before any generation happened).
+    cross-provider fallback fired). Rejected calls raise ``ToolError``.
     """
 
     model_config = ConfigDict(extra="allow")
 
     hosted_url: Optional[str] = Field(
         default=None,
-        description="Public URL of the processed WebP image, or omitted when an error block is returned.",
+        description="Public URL of the processed WebP image, or omitted on a pending job handle.",
     )
     model: Optional[str] = Field(
         default=None, description="Provider model id that produced the image (e.g. 'gpt-image-2')."
@@ -72,10 +71,6 @@ class GenerateImageResult(BaseModel):
     fallback_reason: Optional[str] = Field(
         default=None, description="Why the fallback fired (e.g. 'provider_error')."
     )
-    error: Optional[dict[str, Any]] = Field(
-        default=None,
-        description="Structured error block (e.g. PROVIDER_TEMPORARILY_DISABLED) when the call was rejected before generation.",
-    )
     cancelled: Optional[bool] = Field(
         default=None,
         description="True when the user declined/cancelled the cost-confirmation prompt; no provider call was made and no artifact was written.",
@@ -99,7 +94,7 @@ class GenerateDiagramResult(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
 
     hosted_url: Optional[str] = Field(
-        default=None, description="Public URL of the processed diagram WebP, or omitted on error."
+        default=None, description="Public URL of the processed diagram WebP, or omitted on a pending job handle."
     )
     model: Optional[str] = Field(default=None, description="Provider model id that produced the diagram.")
     cost_estimate: Optional[str] = Field(default=None, description="Human display cost derived from ai_attribution.")
@@ -116,10 +111,6 @@ class GenerateDiagramResult(BaseModel):
     fallback_used: Optional[bool] = Field(default=None, description="True when a cross-provider fallback fired.")
     intended_provider: Optional[str] = Field(default=None, description="Provider originally selected, on fallback.")
     fallback_reason: Optional[str] = Field(default=None, description="Why the fallback fired.")
-    error: Optional[dict[str, Any]] = Field(
-        default=None,
-        description="Structured error block (INVALID_INPUT, MERMAID_PARSE_ERROR, MERMAID_FORMAT_MISMATCH, INVALID_DIMENSIONS, INVALID_MODEL_HINT, PROVIDER_TEMPORARILY_DISABLED).",
-    )
     cancelled: Optional[bool] = Field(
         default=None,
         description="True when the user declined/cancelled the cost-confirmation prompt; no provider call was made and no artifact was written.",
@@ -145,9 +136,6 @@ class GeneratePromptResult(BaseModel):
         default=None, alias="register", description="Register applied, if any."
     )
     platform: Optional[str] = Field(default=None, description="Platform supplied, if any.")
-    error: Optional[dict[str, Any]] = Field(
-        default=None, description="Structured error block when a disabled provider was hinted."
-    )
 
 
 class GetImageResult(BaseModel):

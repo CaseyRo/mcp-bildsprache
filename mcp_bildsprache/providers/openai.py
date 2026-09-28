@@ -274,7 +274,7 @@ async def generate_openai(
         if reference_images:
             # Reference-bearing path: POST /v1/images/edits with multipart
             # `image[]` uploads. Per the brief's hero shots (which used
-            # `image[]=sien.jpg`), the edits endpoint is the canonical way
+            # `image[]=dog-2.jpg`), the edits endpoint is the canonical way
             # to generate identity-aware images on gpt-image-2.
             logger.info(
                 "openai: routing to /images/edits with %d reference image(s)",

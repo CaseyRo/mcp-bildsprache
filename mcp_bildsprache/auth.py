@@ -90,13 +90,13 @@ def create_auth(
     Args:
         api_key: Static API key for bearer token auth (None to skip).
         keycloak_issuer: Keycloak realm issuer URL
-            (e.g. https://auth.cdit-works.de/realms/cdit-mcp).
+            (e.g. https://auth.example.com/realms/<realm>).
         keycloak_audience: Expected JWT audience claim
             (e.g. mcp-bildsprache).
         keycloak_client_id: Pre-registered Keycloak client ID.
         keycloak_client_secret: Keycloak client secret.
         base_url: Public URL of this server
-            (e.g. https://bildsprache.cdit-dev.de).
+            (e.g. https://bildsprache.example.com).
     """
     config_url = f"{keycloak_issuer}/.well-known/openid-configuration"
 

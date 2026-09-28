@@ -353,7 +353,7 @@ class TestReferenceImages:
         """Per the May 2026 brand-collapse follow-up (2026-05-09), refs
         route to /v1/images/edits with multipart `image[]=` uploads
         rather than being dropped. This is what the brief's hero shots
-        used (`image[]=sien.jpg`)."""
+        used (`image[]=dog-2.jpg`)."""
         httpx_mock.add_response(
             url="https://api.openai.com/v1/images/edits",
             json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}),

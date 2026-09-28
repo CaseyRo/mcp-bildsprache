@@ -190,22 +190,22 @@ def _build_parent_app(tmp_path: Path, *, tailnet_host: str | None) -> Starlette:
 
 class TestTailnetMiddleware:
     def test_public_host_returns_404_for_gallery(self, tmp_path: Path):
-        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.tailnet.ts.net")
+        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.example.ts.net")
         with TestClient(app) as client:
-            resp = client.get("/gallery/", headers={"Host": "bildsprache.cdit-dev.de"})
+            resp = client.get("/gallery/", headers={"Host": "bildsprache.example.com"})
             assert resp.status_code == 404
 
     def test_public_host_reaches_mcp(self, tmp_path: Path):
-        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.tailnet.ts.net")
+        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.example.ts.net")
         with TestClient(app) as client:
-            resp = client.get("/mcp", headers={"Host": "bildsprache.cdit-dev.de"})
+            resp = client.get("/mcp", headers={"Host": "bildsprache.example.com"})
             assert resp.status_code == 200
             assert resp.json() == {"ok": True}
 
     def test_tailnet_host_reaches_gallery(self, tmp_path: Path):
-        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.tailnet.ts.net")
+        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.example.ts.net")
         with TestClient(app) as client:
-            resp = client.get("/gallery/", headers={"Host": "bs-gallery.tailnet.ts.net"})
+            resp = client.get("/gallery/", headers={"Host": "bs-gallery.example.ts.net"})
             assert resp.status_code == 200
             assert "<html" in resp.text.lower()
 
@@ -217,11 +217,11 @@ class TestTailnetMiddleware:
 
     def test_host_with_port_matches(self, tmp_path: Path):
         """`Host: foo:1234` should still match `foo` (port stripped)."""
-        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.tailnet.ts.net")
+        app = _build_parent_app(tmp_path, tailnet_host="bs-gallery.example.ts.net")
         with TestClient(app) as client:
             resp = client.get(
                 "/gallery/",
-                headers={"Host": "bs-gallery.tailnet.ts.net:443"},
+                headers={"Host": "bs-gallery.example.ts.net:443"},
             )
             assert resp.status_code == 200
 

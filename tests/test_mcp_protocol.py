@@ -116,3 +116,26 @@ async def test_gpt_image_25_models_and_quality_on_the_surface():
     props = tools["generate_image"].input_schema["properties"]
     assert set(props["quality"]["anyOf"][0]["enum"]) == {"low", "medium", "high", "xhigh", "max", "auto"}
     assert "transparent" in props
+
+
+@pytest.mark.asyncio
+async def test_disabled_provider_is_a_tool_error(capsys):
+    # generate_prompt never calls a provider, so this stays offline.
+    from fastmcp.exceptions import ToolError
+
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="PROVIDER_TEMPORARILY_DISABLED"):
+            await client.call_tool("generate_prompt", {"prompt": "x", "model": "flux"})
+    lines = [ln for ln in capsys.readouterr().err.splitlines() if '"mcp_usage"' in ln]
+    assert '"outcome": "error"' in lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_validation_failures_are_tool_errors():
+    from fastmcp.exceptions import ToolError
+
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="INVALID_INPUT"):
+            await client.call_tool("generate_diagram", {"format": "flow"})
+        with pytest.raises(ToolError, match="INVALID_SINCE"):
+            await client.call_tool("generation_stats", {"since": "not-a-date"})
