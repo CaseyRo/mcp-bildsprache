@@ -7,7 +7,7 @@ API is stable enough that a raw POST is fine.
 Endpoint: POST https://api.openai.com/v1/images/generations
 
 Defaults:
-- model:          per call, else OPENAI_IMAGE_MODEL (default gpt-image-2)
+- model:          per call, else OPENAI_IMAGE_MODEL, else gpt-image-2
 - quality:        medium (2.5 models add xhigh and max)
 - output_format:  webp
 - compression:    90 (only applied for jpeg/webp)
@@ -252,7 +252,7 @@ async def generate_openai(
     if stream:
         raise ValueError("openai: streaming is not enabled in v1")
 
-    model = model or settings.openai_image_model
+    model = model or settings.openai_image_model or "gpt-image-2"
     check_options(model, quality, background, output_format)
 
     # Strip params gpt-image-2 rejects.

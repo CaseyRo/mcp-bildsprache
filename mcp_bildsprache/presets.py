@@ -14,6 +14,7 @@ default; Gemini Nano Banana Pro is reserved for the diagram path
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from mcp_bildsprache.types import ProviderTemporarilyDisabled
@@ -55,10 +56,10 @@ def _casey_palette_clause() -> str:
     """Render the locked palette into a prompt clause for any casey image."""
     return (
         "Palette (botanical, locked May 2026): paper bone #F4EFE3 background "
-        "(~70% of surface), forest moss #2C4A38 for primary form (wordmarks, "
-        "key links, drenched grounds), pine ink #1F2E26 for body text, "
-        "weathered ochre #B8884A as accent (≤5% — links, marks, hairlines, "
-        "drift words), soft moss #C7CFB8 for hairlines and rules only."
+        "(~70% of surface), forest moss #2C4A38 for primary form and drenched "
+        "grounds, pine ink #1F2E26 for deep darks, weathered ochre #B8884A as "
+        "accent (≤5% — small marks, hairlines), soft moss #C7CFB8 for "
+        "hairlines and rules only."
     )
 
 
@@ -76,12 +77,34 @@ _CASEY_ANTI_ANCHORS_CLAUSE: str = (
     "tech-launch glamour."
 )
 
+# Track B5: the brand name, its tagline and palette roles like "wordmarks" /
+# "drift words" used to sit in the preset, and both models painted them into
+# scenes (wordmarks on mugs, taglines on walls). The preset now carries only
+# visual style; text rules are added per prompt by ``get_preset``.
 _CASEY_BASE: str = (
-    f"Brand: casey (one voice, two registers). "
-    f"{_casey_palette_clause()} "
-    f"{_CASEY_TYPOGRAPHY_CLAUSE} "
+    f"Visual style: {_casey_palette_clause()} "
     f"{_CASEY_ANTI_ANCHORS_CLAUSE}"
 )
+
+NO_BRAND_TEXT_CLAUSE: str = (
+    "No visible brand names, slogans, taglines, mantras or wordmarks anywhere "
+    "in the scene (not on objects, walls, paper, notes or screens) unless the "
+    "prompt asks for them. These style notes describe the look, not text to "
+    "paint."
+)
+
+# Prompt words that mean the caller wants text / a logo / a wordmark in-image.
+_TEXT_REQUEST = re.compile(
+    r"\b(text|texts|logo|logos|wordmark|wordmarks|lettering|typography|"
+    r"headline|heading|title|caption|slogan|tagline|label|signage|quote|"
+    r"written|words)\b",
+    re.IGNORECASE,
+)
+
+
+def prompt_requests_text(prompt: str | None) -> bool:
+    """True when the prompt itself asks for in-image text, a logo or a wordmark."""
+    return bool(prompt and _TEXT_REQUEST.search(prompt))
 
 _CASEY_REGISTER_PERSONAL: str = (
     "Register: personal (recognition surface — who Casey is). "
@@ -166,6 +189,23 @@ PLATFORM_SIZES: dict[str, tuple[int, int]] = {
 
 
 def get_preset(
+    context: str,
+    register: Literal["personal", "professional"] | None = None,
+    prompt: str | None = None,
+) -> str:
+    """Brand preset plus the text rule for ``prompt``: the casey typography
+    clause when the prompt asks for text, else :data:`NO_BRAND_TEXT_CLAUSE`."""
+    from mcp_bildsprache.brands import normalize_brand
+
+    preset = _preset_body(context, register)
+    if not prompt_requests_text(prompt):
+        return f"{preset} {NO_BRAND_TEXT_CLAUSE}"
+    if normalize_brand(context) == "yorizon":
+        return preset
+    return f"{preset} {_CASEY_TYPOGRAPHY_CLAUSE}"
+
+
+def _preset_body(
     context: str,
     register: Literal["personal", "professional"] | None = None,
 ) -> str:

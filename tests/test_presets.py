@@ -214,3 +214,49 @@ class TestPlatformSizes:
 
     def test_platform_sizes_count(self):
         assert len(PLATFORM_SIZES) == 10
+
+
+class TestBrandTextLeakage:
+    """Track B5: the casey preset must not seed brand text into scenes."""
+
+    LEAKY = ("one voice", "two registers", "drift", "wordmark", "Brand: casey")
+
+    @pytest.mark.parametrize("register", [None, "personal", "professional"])
+    def test_scene_prompt_carries_no_brand_strings(self, register):
+        from mcp_bildsprache.presets import NO_BRAND_TEXT_CLAUSE
+
+        preset = get_preset("casey", register=register, prompt="coffee on a kitchen table")
+        body = preset.replace(NO_BRAND_TEXT_CLAUSE, "")
+        for leak in self.LEAKY:
+            assert leak.lower() not in body.lower()
+        assert NO_BRAND_TEXT_CLAUSE in preset
+        # Style guidance survives.
+        for token in CASEY_PALETTE.values():
+            assert token["hex"] in preset
+        assert "Avoid: chrome" in preset
+
+    @pytest.mark.parametrize(
+        "prompt",
+        ["a poster with the headline 'Ship it'", "our logo on a mug", "casey wordmark, flat"],
+    )
+    def test_text_request_gets_typography_not_the_ban(self, prompt):
+        from mcp_bildsprache.presets import NO_BRAND_TEXT_CLAUSE
+
+        preset = get_preset("casey", prompt=prompt)
+        assert NO_BRAND_TEXT_CLAUSE not in preset
+        assert "Vollkorn" in preset
+
+    def test_no_prompt_defaults_to_the_ban(self):
+        from mcp_bildsprache.presets import NO_BRAND_TEXT_CLAUSE
+
+        assert NO_BRAND_TEXT_CLAUSE in get_preset("casey")
+
+    async def test_generate_prompt_applies_the_rule(self):
+        from mcp_bildsprache.presets import NO_BRAND_TEXT_CLAUSE
+        from mcp_bildsprache.server import generate_prompt
+
+        scene = await generate_prompt(prompt="casey at his desk, morning light", context="casey")
+        assert NO_BRAND_TEXT_CLAUSE in scene.engineered_prompt
+        assert "one voice" not in scene.engineered_prompt
+        titled = await generate_prompt(prompt="blog header with the title 'Drift'", context="casey")
+        assert NO_BRAND_TEXT_CLAUSE not in titled.engineered_prompt

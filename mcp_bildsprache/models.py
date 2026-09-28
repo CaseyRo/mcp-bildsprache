@@ -39,6 +39,10 @@ class GenerateImageResult(BaseModel):
     model: Optional[str] = Field(
         default=None, description="Provider model id that produced the image (e.g. 'gpt-image-2')."
     )
+    model_reason: Optional[str] = Field(
+        default=None,
+        description="Why this model: explicit model, OPENAI_IMAGE_MODEL, identity scene, or flare default.",
+    )
     cost_estimate: Optional[str] = Field(
         default=None, description="Human display cost derived from ai_attribution (e.g. '€0.0490')."
     )

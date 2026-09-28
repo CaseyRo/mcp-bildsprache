@@ -21,9 +21,10 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
 
-    # OpenAI image-generation model IDs (config so we can pin a snapshot like
-    # gpt-image-2-2026-04-21 without a code change).
-    openai_image_model: str = "gpt-image-2"
+    # OpenAI image model. Empty (default) = generate_image picks per call:
+    # gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise (A/B
+    # 2026-09-28). Set it (e.g. to pin a snapshot) to force one model.
+    openai_image_model: str = ""
 
     # Image hosting
     enable_hosting: bool = True

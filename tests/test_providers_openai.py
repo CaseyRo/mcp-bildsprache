@@ -308,7 +308,6 @@ class TestDispatchSemaphore:
         self, httpx_mock: HTTPXMock
     ) -> None:
         import asyncio
-        import time
 
         # Two slow responses — if calls fanned out in parallel, total elapsed
         # would be ~0.2s; serial dispatch yields ~0.4s. We assert the serial

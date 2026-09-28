@@ -404,6 +404,80 @@ class TestIdentityIntegration:
         set_loaded_packs({})
 
 
+class TestDefaultModelSplit:
+    """No model hint + no OPENAI_IMAGE_MODEL: identity scene → gpt-image-2,
+    otherwise → gpt-image-2.5-flare. An explicit model always wins."""
+
+    async def _run(self, tmp_path, monkeypatch, **kwargs):
+        from mcp_bildsprache import config as cfg
+        from mcp_bildsprache.server import generate_image
+
+        ledger_file = tmp_path / "_ledger" / "generations.jsonl"
+        monkeypatch.setattr(cfg.settings, "ledger_enabled", True)
+        monkeypatch.setattr(cfg.settings, "ledger_path", str(ledger_file))
+        with patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.openai_image_model = ""
+            s.sync_wait_seconds = 5
+            ss.image_storage_path = str(tmp_path / "out")
+            ss.image_domain = "https://img.cdit-works.de"
+            result = _d(await generate_image(dimensions="512x512", **kwargs))
+        record = json.loads(ledger_file.read_text().splitlines()[-1])
+        return result, record
+
+    @pytest.mark.anyio
+    async def test_identity_pack_scene_uses_gpt_image_2(self, tmp_path, mock_provider, monkeypatch):
+        from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
+
+        set_loaded_packs(load_identity_packs(TestIdentityIntegration._write_identity_pack(tmp_path)))
+        try:
+            result, record = await self._run(
+                tmp_path, monkeypatch, prompt="morning walk", context="casey"
+            )
+        finally:
+            set_loaded_packs({})
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2"
+        assert result["model_reason"].startswith("identity scene")
+        assert record["model_reason"] == result["model_reason"]
+
+    @pytest.mark.anyio
+    async def test_caller_reference_images_use_gpt_image_2(self, tmp_path, mock_provider, monkeypatch):
+        result, _ = await self._run(
+            tmp_path, monkeypatch, prompt="portrait", reference_images=[b"ref"]
+        )
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2"
+        assert result["model_reason"].startswith("identity scene")
+
+    @pytest.mark.anyio
+    async def test_no_identity_uses_flare(self, tmp_path, mock_provider, monkeypatch):
+        result, record = await self._run(tmp_path, monkeypatch, prompt="a flat icon of a teapot")
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-flare"
+        assert record["model_reason"] == result["model_reason"]
+        assert "flare" in result["model_reason"]
+
+    @pytest.mark.anyio
+    async def test_explicit_model_wins(self, tmp_path, mock_provider, monkeypatch):
+        result, _ = await self._run(
+            tmp_path, monkeypatch, prompt="teapot", model="gpt-image-2.5-sunburst"
+        )
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-sunburst"
+        assert result["model_reason"] == "explicit model"
+        result, _ = await self._run(
+            tmp_path, monkeypatch, prompt="portrait", model="gpt-image-2.5-flare",
+            reference_images=[b"ref"],
+        )
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-flare"
+
+    def test_openai_image_model_env_forces(self):
+        from mcp_bildsprache.server import _pick_raster_model
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.openai_image_model = "gpt-image-2-2026-04-21"
+            assert _pick_raster_model("openai", None, identity_scene=False) == (
+                "gpt-image-2-2026-04-21", "OPENAI_IMAGE_MODEL set"
+            )
+
+
 class TestStaticMountHygiene:
     """Reference images on /data/identity must never be reachable via the
     public static mount. This guards against a regression where someone

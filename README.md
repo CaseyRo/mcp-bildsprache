@@ -16,7 +16,7 @@ docker compose up --build
 ## MCP Tools
 
 - `generate_image` — Full image generation with brand preset injection.
-  Default raster path: OpenAI gpt-image-2 at medium quality (`OPENAI_IMAGE_MODEL`). Per call,
+  Default raster path: OpenAI at medium quality: gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise (`OPENAI_IMAGE_MODEL` forces one). Per call,
   `model` picks `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst` (premium/editing);
   `quality` (`low`…`high`, `auto`; `xhigh`/`max` on 2.5) and `transparent` (2.5 only) are
   OpenAI options. The retired `gpt-image-1.5` / `gpt-image-1-mini` hints map to gpt-image-2.
