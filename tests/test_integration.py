@@ -13,6 +13,11 @@ from mcp_bildsprache.storage import StorageError
 from mcp_bildsprache.types import ProviderResult
 
 
+def _d(result):
+    """Tools return pydantic models; compare against the wire shape."""
+    return result.model_dump(by_alias=True, exclude_none=True)
+
+
 def _fake_provider_result(model: str = "gpt-image-2") -> ProviderResult:
     buf = io.BytesIO()
     Image.new("RGB", (1024, 1024), color=(80, 120, 160)).save(buf, format="PNG")
@@ -50,12 +55,12 @@ class TestGenerateImageHosting:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="a beautiful sunset",
                 context="casey",
                 register="personal",
                 platform="blog-hero",
-            )
+            ))
 
         assert "hosted_url" in result
         # Post-collapse: casey/ is the new prefix.
@@ -89,7 +94,7 @@ class TestGenerateImageHosting:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="test", dimensions="512x512")
+            result = _d(await generate_image(prompt="test", dimensions="512x512"))
 
         assert "hosted_url" in result
         assert result["response_mode"] == "url"
@@ -107,11 +112,11 @@ class TestRawMode:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="test raw mode",
                 dimensions="800x600",
                 raw=True,
-            )
+            ))
 
         assert "hosted_url" in result
         assert "raw_url" in result
@@ -134,11 +139,11 @@ class TestRawMode:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="test no raw",
                 dimensions="800x600",
                 raw=False,
-            )
+            ))
 
         assert "hosted_url" in result
         assert "raw_url" not in result
@@ -166,7 +171,7 @@ class TestNoFallback:
 
             from mcp_bildsprache.server import generate_image
             with pytest.raises(RuntimeError, match="OpenAI down"):
-                await generate_image(prompt="test no fallback", dimensions="512x512")
+                _d(await generate_image(prompt="test no fallback", dimensions="512x512"))
 
         # Gemini must NOT have been called — no silent swap.
         success_mock.assert_not_awaited()
@@ -179,7 +184,7 @@ class TestNoFallback:
         with patch("mcp_bildsprache.server.settings"), \
              patch("mcp_bildsprache.server.store_image", side_effect=StorageError("disk full")):
             with pytest.raises(StorageError, match="disk full"):
-                await generate_image(prompt="test storage fail", dimensions="512x512")
+                _d(await generate_image(prompt="test storage fail", dimensions="512x512"))
 
 
 class TestDimensionHandling:
@@ -192,11 +197,11 @@ class TestDimensionHandling:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="test dimensions",
                 platform="blog-hero",      # Would be 1600x900
                 dimensions="800x600",       # Should override
-            )
+            ))
 
         assert result["dimensions"] == "800x600"
         webp_files = list(tmp_path.rglob("*.webp"))
@@ -213,7 +218,7 @@ class TestDimensionHandling:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="test default size")
+            result = _d(await generate_image(prompt="test default size"))
 
         assert result["dimensions"] == "1200x1200"
 
@@ -279,11 +284,11 @@ class TestIdentityIntegration:
             ss.image_domain = "https://img.cdit-works.de"
 
             with caplog.at_level(logging.INFO, logger="mcp_bildsprache.server"):
-                await generate_image(
+                _d(await generate_image(
                     prompt="morning walk through the forest",
                     context="@casey.berlin",
                     dimensions="512x512",
-                )
+                ))
 
         # The provider mock was called with reference_images populated.
         call_kwargs = mock_provider.await_args.kwargs
@@ -322,11 +327,11 @@ class TestIdentityIntegration:
             ss.image_storage_path = str(tmp_path / "out")
             ss.image_domain = "https://img.cdit-works.de"
 
-            await generate_image(
+            _d(await generate_image(
                 prompt="a flat icon of a coffee cup",
                 context="@casey.berlin",
                 dimensions="512x512",
-            )
+            ))
 
         # No reference images forwarded; no composition clause in prompt.
         call_kwargs = mock_provider.await_args.kwargs
@@ -355,11 +360,11 @@ class TestIdentityIntegration:
             ss.image_storage_path = str(tmp_path / "out")
             ss.image_domain = "https://img.cdit-works.de"
 
-            await generate_image(
+            _d(await generate_image(
                 prompt="morning walk",
                 context="yorizon",
                 dimensions="512x512",
-            )
+            ))
 
         sent_prompt = mock_provider.await_args.args[0]
         assert CASEY_COMPOSITION_CLAUSE not in sent_prompt
@@ -384,12 +389,12 @@ class TestIdentityIntegration:
             ss.image_storage_path = str(tmp_path / "out")
             ss.image_domain = "https://img.cdit-works.de"
 
-            await generate_image(
+            _d(await generate_image(
                 prompt="morning walk",
                 context="@casey.berlin",
                 dimensions="512x512",
                 reference_images=[caller_ref],
-            )
+            ))
 
         call_kwargs = mock_provider.await_args.kwargs
         refs = call_kwargs["reference_images"]
@@ -420,6 +425,7 @@ class TestStaticMountHygiene:
         fake_app = MagicMock()
         with patch("mcp_bildsprache.server.settings") as s:
             s.image_storage_path = str(images_dir)
+            s.openai_image_model = "gpt-image-2"
             _mount_static_files(fake_app)
 
         # Exactly one mount call, rooted at the images dir.
@@ -437,12 +443,12 @@ class TestOtherTools:
     async def test_generate_prompt_basic(self):
         from mcp_bildsprache.server import generate_prompt
 
-        result = await generate_prompt(
+        result = _d(await generate_prompt(
             prompt="a sunset over Berlin",
             context="casey",
             register="personal",
             platform="blog-hero",
-        )
+        ))
 
         assert "engineered_prompt" in result
         assert "a sunset over Berlin" in result["engineered_prompt"]
@@ -462,7 +468,7 @@ class TestOtherTools:
             s.gemini_api_key = SecretStr("fake-key")
             s.openai_image_model = "gpt-image-2"
 
-            result = await list_models()
+            result = _d(await list_models())
 
         assert "providers" in result
         providers = result["providers"]
@@ -494,7 +500,7 @@ class TestOtherTools:
     async def test_get_visual_presets_returns_presets(self):
         from mcp_bildsprache.server import get_visual_presets
 
-        result = await get_visual_presets()
+        result = _d(await get_visual_presets())
         assert "presets" in result
         assert "platforms" in result
         # Active brand list post-collapse.
@@ -511,7 +517,7 @@ class TestOtherTools:
     async def test_get_visual_presets_specific_context(self):
         from mcp_bildsprache.server import get_visual_presets
 
-        result = await get_visual_presets(context="casey", register="personal")
+        result = _d(await get_visual_presets(context="casey", register="personal"))
         assert "context" in result
         assert "preset" in result
         assert "Register: personal" in result["preset"]
@@ -567,8 +573,9 @@ class TestListRecentGenerations:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
-            result = await list_recent_generations()
+            result = _d(await list_recent_generations())
 
         assert result["total"] == 2
         assert result["returned"] == 2
@@ -590,8 +597,9 @@ class TestListRecentGenerations:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
-            result = await list_recent_generations(brand="yorizon")
+            result = _d(await list_recent_generations(brand="yorizon"))
 
         assert result["total"] == 1
         assert result["brand"] == "yorizon"
@@ -607,8 +615,9 @@ class TestListRecentGenerations:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
-            result = await list_recent_generations(brand="casey-berlin")
+            result = _d(await list_recent_generations(brand="casey-berlin"))
 
         assert result["total"] == 1
         assert result["generations"][0]["brand"] == "casey-berlin"
@@ -625,9 +634,10 @@ class TestListRecentGenerations:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
-            page1 = await list_recent_generations(limit=2, offset=0)
-            page2 = await list_recent_generations(limit=2, offset=2)
+            page1 = _d(await list_recent_generations(limit=2, offset=0))
+            page2 = _d(await list_recent_generations(limit=2, offset=2))
 
         assert page1["total"] == 5
         assert page1["returned"] == 2
@@ -643,8 +653,9 @@ class TestListRecentGenerations:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
-            result = await list_recent_generations(brand="casey")
+            result = _d(await list_recent_generations(brand="casey"))
 
         assert "error" not in result
         assert result["total"] == 0
@@ -660,8 +671,9 @@ class TestListRecentGenerations:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
-            result = await list_recent_generations(limit=0)
+            result = _d(await list_recent_generations(limit=0))
 
         assert result["total"] == 1
         assert result["returned"] == 0
@@ -675,43 +687,6 @@ class TestListRecentGenerations:
 
 
 class TestProgressLogGuard:
-    @pytest.mark.anyio
-    async def test_progress_swallows_closed_stream(self):
-        """A closed-session write must NOT propagate out of _progress —
-        otherwise it tears down the still-running tool call (the -32001 bug).
-        """
-        import anyio
-
-        from mcp_bildsprache.server import _progress
-
-        ctx = AsyncMock()
-        ctx.report_progress.side_effect = anyio.ClosedResourceError()
-
-        # Must return None without raising.
-        assert await _progress(ctx, 1, 5, "step") is None
-        ctx.report_progress.assert_awaited_once()
-
-    @pytest.mark.anyio
-    async def test_info_swallows_broken_stream(self):
-        import anyio
-
-        from mcp_bildsprache.server import _info
-
-        ctx = AsyncMock()
-        ctx.info.side_effect = anyio.BrokenResourceError()
-
-        assert await _info(ctx, "hello") is None
-        ctx.info.assert_awaited_once()
-
-    @pytest.mark.anyio
-    async def test_progress_swallows_generic_exception(self):
-        from mcp_bildsprache.server import _progress
-
-        ctx = AsyncMock()
-        ctx.report_progress.side_effect = RuntimeError("boom")
-
-        assert await _progress(ctx, 1, 5, "step") is None
-
     @pytest.mark.anyio
     async def test_generate_image_completes_despite_closed_session(
         self, tmp_path: Path, mock_provider
@@ -735,22 +710,23 @@ class TestProgressLogGuard:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="a resilient render",
                 context="casey",
                 platform="blog-hero",
                 ctx=ctx,
-            )
+            ))
 
             # The render completed despite every notification write failing.
             assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
 
             # And it's recoverable via the listing tool.
-            recovered = await list_recent_generations()
+            recovered = _d(await list_recent_generations())
 
         assert recovered["total"] == 1
         assert recovered["generations"][0]["hosted_url"] == result["hosted_url"]
@@ -809,14 +785,15 @@ class TestAsyncDispatchPoll:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 30  # plenty for the instant mock
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="fast", context="casey", dimensions="512x512"
-            )
+            ))
 
         assert "job_id" not in result
         assert result.get("status") != "pending"
@@ -838,6 +815,7 @@ class TestAsyncDispatchPoll:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 0.1  # tiny budget → handle returned fast
             ss.image_storage_path = str(tmp_path)
@@ -845,9 +823,9 @@ class TestAsyncDispatchPoll:
 
             from mcp_bildsprache.server import generate_image
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="slow", context="casey", dimensions="512x512"
-            )
+            ))
 
         assert result["status"] == "pending"
         assert result["poll_with"] == "get_image_result"
@@ -869,14 +847,15 @@ class TestAsyncDispatchPoll:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 30
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="bg", context="casey", dimensions="512x512", background=True
-            )
+            ))
 
         assert result["status"] == "pending"
         assert result["job_id"]
@@ -901,21 +880,22 @@ class TestAsyncDispatchPoll:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 0.01  # return handle before render finishes
             s.poll_wait_max_seconds = 55
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            dispatched = await generate_image(
+            dispatched = _d(await generate_image(
                 prompt="detached", context="casey", dimensions="512x512"
-            )
+            ))
             assert dispatched["status"] == "pending"
             job_id = dispatched["job_id"]
 
             # The dispatching call has returned; the render is still running on a
             # detached task. Poll until it finishes (long-poll does the waiting).
-            polled = await get_image_result(job_id, wait_seconds=5)
+            polled = _d(await get_image_result(job_id, wait_seconds=5))
 
         assert polled["status"] == "done"
         assert polled["source"] == "registry"
@@ -949,6 +929,7 @@ class TestAsyncDispatchPoll:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 0.01
             s.poll_wait_max_seconds = 55
@@ -957,18 +938,18 @@ class TestAsyncDispatchPoll:
 
             from mcp_bildsprache.server import generate_image, get_image_result
 
-            dispatched = await generate_image(
+            dispatched = _d(await generate_image(
                 prompt="poll me", context="casey", dimensions="512x512"
-            )
+            ))
             job_id = dispatched["job_id"]
 
             # Immediate single-shot poll → still pending.
-            first = await get_image_result(job_id, wait_seconds=0)
+            first = _d(await get_image_result(job_id, wait_seconds=0))
             assert first["status"] == "pending"
             assert first["source"] == "registry"
 
             # Long-poll until done.
-            second = await get_image_result(job_id, wait_seconds=5)
+            second = _d(await get_image_result(job_id, wait_seconds=5))
 
         assert second["status"] == "done"
         assert second["hosted_url"].startswith("https://img.cdit-works.de/casey/")
@@ -991,6 +972,7 @@ class TestAsyncDispatchPoll:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 0.01  # return handle before the boom
             s.poll_wait_max_seconds = 55
@@ -999,11 +981,11 @@ class TestAsyncDispatchPoll:
 
             from mcp_bildsprache.server import generate_image, get_image_result
 
-            dispatched = await generate_image(
+            dispatched = _d(await generate_image(
                 prompt="will fail", context="casey", dimensions="512x512"
-            )
+            ))
             job_id = dispatched["job_id"]
-            polled = await get_image_result(job_id, wait_seconds=5)
+            polled = _d(await get_image_result(job_id, wait_seconds=5))
 
         assert polled["status"] == "error"
         assert "provider exploded" in polled["error"]
@@ -1041,7 +1023,7 @@ class TestAsyncDispatchPoll:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.poll_wait_max_seconds = 55
-            result = await get_image_result("orphan-job-1")
+            result = _d(await get_image_result("orphan-job-1"))
 
         assert result["status"] == "done"
         assert result["source"] == "ledger"
@@ -1077,7 +1059,7 @@ class TestAsyncDispatchPoll:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.poll_wait_max_seconds = 55
-            result = await get_image_result("orphan-fail-1")
+            result = _d(await get_image_result("orphan-fail-1"))
 
         assert result["status"] == "error"
         assert result["source"] == "ledger"
@@ -1094,7 +1076,7 @@ class TestAsyncDispatchPoll:
 
         with patch("mcp_bildsprache.server.settings") as s:
             s.poll_wait_max_seconds = 55
-            result = await get_image_result("never-existed")
+            result = _d(await get_image_result("never-existed"))
 
         assert result["status"] == "not_found"
         assert result["job_id"] == "never-existed"
@@ -1132,13 +1114,14 @@ class TestGenerationLedgerWiring:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="ledger success", context="casey", dimensions="512x512"
-            )
+            ))
 
         assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
         recs = ledmod.read_records(path=ledger_file)
@@ -1174,10 +1157,10 @@ class TestGenerationLedgerWiring:
 
             with pytest.raises(RuntimeError, match="OpenAI 500 boom"):
                 # A retired hint must be recorded as the model that ran.
-                await generate_image(
+                _d(await generate_image(
                     prompt="ledger failure", context="casey", dimensions="512x512",
                     model="gpt-image-1.5",
-                )
+                ))
 
         recs = ledmod.read_records(path=ledger_file)
         assert len(recs) == 1
@@ -1219,14 +1202,15 @@ class TestGenerationLedgerWiring:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 30  # ample for the instant mock → inline result
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="torn render", context="casey", platform="blog-hero", ctx=ctx
-            )
+            ))
 
         assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
         recs = ledmod.read_records(path=ledger_file)
@@ -1254,13 +1238,14 @@ class TestGenerationLedgerWiring:
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
+            s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(
+            result = _d(await generate_image(
                 prompt="resilient", context="casey", dimensions="512x512"
-            )
+            ))
 
         # Generation still succeeded despite the ledger write failing.
         assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/")
@@ -1285,7 +1270,7 @@ class TestGenerationLedgerWiring:
                 path=ledger_file,
             )
 
-        stats = await generation_stats(days=30)
+        stats = _d(await generation_stats(days=30))
         assert "error" not in stats
         assert stats["totals"]["attempts"] == 3
         assert stats["totals"]["successes"] == 2
@@ -1300,7 +1285,7 @@ class TestGenerationLedgerWiring:
         from mcp_bildsprache.server import generation_stats
 
         self._point_ledger_at(tmp_path, monkeypatch)
-        stats = await generation_stats(days=7)
+        stats = _d(await generation_stats(days=7))
         assert "error" not in stats
         assert stats["totals"]["attempts"] == 0
         assert stats["totals"]["success_pct"] == 0.0
@@ -1313,7 +1298,7 @@ class TestGenerationLedgerWiring:
         from mcp_bildsprache.server import generation_stats
 
         self._point_ledger_at(tmp_path, monkeypatch)
-        stats = await generation_stats(since="not-a-date")
+        stats = _d(await generation_stats(since="not-a-date"))
         assert stats["error"]["code"] == "INVALID_SINCE"
 
 
@@ -1335,13 +1320,13 @@ class TestGenerateDiagramTool:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(
+            result = _d(await generate_diagram(
                 format="flow",
                 prompt=(
                     "User submits form -> validation -> API call -> "
                     "response (success/error branches)"
                 ),
-            )
+            ))
 
         # No error key — successful response.
         assert "error" not in result
@@ -1371,7 +1356,7 @@ class TestGenerateDiagramTool:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="flow", mermaid=mermaid)
+            result = _d(await generate_diagram(format="flow", mermaid=mermaid))
 
         assert "error" not in result
         assert "hosted_url" in result
@@ -1401,7 +1386,7 @@ class TestGenerateDiagramTool:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="sequence", mermaid=mermaid)
+            result = _d(await generate_diagram(format="sequence", mermaid=mermaid))
 
         assert "error" not in result
         # Sequence default dimensions: portrait orientation.
@@ -1425,7 +1410,7 @@ class TestGenerateDiagramTool:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="state", mermaid=mermaid)
+            result = _d(await generate_diagram(format="state", mermaid=mermaid))
 
         assert "error" not in result
 
@@ -1441,11 +1426,11 @@ class TestGenerateDiagramTool:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(
+            result = _d(await generate_diagram(
                 format="flow",
                 prompt="A simple flow",
                 model_hint="openai",
-            )
+            ))
 
         assert "error" not in result
         # mock_provider returns model='gpt-image-2' by default.
@@ -1455,11 +1440,11 @@ class TestGenerateDiagramTool:
     async def test_flux_hint_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = await generate_diagram(
+        result = _d(await generate_diagram(
             format="flow",
             prompt="A flow",
             model_hint="flux",
-        )
+        ))
 
         assert "error" in result
         assert result["error"]["code"] == "PROVIDER_TEMPORARILY_DISABLED"
@@ -1470,7 +1455,7 @@ class TestGenerateDiagramTool:
     async def test_no_input_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = await generate_diagram(format="flow")
+        result = _d(await generate_diagram(format="flow"))
         assert "error" in result
         assert result["error"]["code"] == "INVALID_INPUT"
 
@@ -1478,9 +1463,9 @@ class TestGenerateDiagramTool:
     async def test_both_inputs_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = await generate_diagram(
+        result = _d(await generate_diagram(
             format="flow", prompt="text", mermaid="flowchart TD\n  A --> B"
-        )
+        ))
         assert "error" in result
         assert result["error"]["code"] == "INVALID_INPUT"
 
@@ -1488,10 +1473,10 @@ class TestGenerateDiagramTool:
     async def test_unsupported_mermaid_type_rejected(self):
         from mcp_bildsprache.server import generate_diagram
 
-        result = await generate_diagram(
+        result = _d(await generate_diagram(
             format="flow",
             mermaid="erDiagram\n  CUSTOMER ||--o{ ORDER : places",
-        )
+        ))
         assert "error" in result
         assert result["error"]["code"] == "MERMAID_PARSE_ERROR"
         assert "ER diagrams" in result["error"]["message"]
@@ -1501,10 +1486,10 @@ class TestGenerateDiagramTool:
         from mcp_bildsprache.server import generate_diagram
 
         # Mermaid says sequenceDiagram, format says flow.
-        result = await generate_diagram(
+        result = _d(await generate_diagram(
             format="flow",
             mermaid="sequenceDiagram\n  A->>B: hello",
-        )
+        ))
         assert "error" in result
         assert result["error"]["code"] == "MERMAID_FORMAT_MISMATCH"
 
@@ -1520,11 +1505,11 @@ class TestGenerateDiagramTool:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(
+            result = _d(await generate_diagram(
                 format="flow",
                 prompt="A flow",
                 register="personal",
-            )
+            ))
 
         assert result["register"] == "personal"
         sent_prompt = mock_provider.await_args.args[0]
@@ -1543,7 +1528,7 @@ class TestGenerateDiagramTool:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="flow", prompt="test diagram")
+            result = _d(await generate_diagram(format="flow", prompt="test diagram"))
 
         assert "ai_attribution" in result
         attr = result["ai_attribution"]

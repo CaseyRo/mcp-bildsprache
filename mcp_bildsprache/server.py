@@ -11,7 +11,7 @@ import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
 from pydantic import BeforeValidator
-from mcp.types import Icon
+from mcp.types import Icon, ToolAnnotations
 
 from pathlib import Path
 
@@ -132,23 +132,9 @@ PROVIDERS = {
 _REFERENCE_BYTES_CACHE: dict[Path, bytes] = {}
 
 
-# anyio stream-state errors raised when a progress/log notification is
-# written to an already-closed/broken streamable-HTTP session. In stateless
-# HTTP mode (see `main()`), a long render (gpt-image-2 ~50-80s) can outlive
-# the proxy/gateway read timeout; the session's write stream is then closed
-# under us, and the *next* ctx.report_progress / ctx.info / ctx.elicit raises
-# one of these. Left unguarded it propagates out of the tool body and is
-# only caught by mcp's broad `except Exception: logger.exception("Stateless
-# session crashed")` in streamable_http_manager — tearing down the session
-# and surfacing to the client as -32001 "Request timed out", even though the
-# render itself completed and the artifact was written + indexed.
-#
-# fastmcp 3.4.2 / mcp 1.27.1 do NOT guard this (Context.report_progress and
-# Context.log call session.send_* -> _write_stream.send() directly), so the
-# guard has to live here. Catching these (a) keeps the still-running tool
-# call alive to finish writing the image, and (b) downgrades the lost-write
-# to a debug line rather than an ERROR-level crash. `list_recent_generations`
-# is then how the caller recovers the URL the timed-out response dropped.
+# anyio stream-state errors: a streamable-HTTP session closed under a running
+# call (CDI-1253). Only used to classify ledger outcomes now; the tools no
+# longer write progress/log notifications (fastmcp 4, SEP-2577).
 try:  # anyio is a hard transitive dep of fastmcp/mcp; import defensively anyway.
     import anyio as _anyio
 
@@ -230,69 +216,6 @@ def _record_generation_attempt(
         _ledger.append_record(record)
     except Exception:  # pragma: no cover — ledger must never break generation
         logger.debug("ledger record build/append failed", exc_info=True)
-
-
-async def _progress(
-    ctx: Context | None,
-    progress: float,
-    total: float,
-    message: str,
-    *,
-    on_closed_stream: Callable[[], None] | None = None,
-) -> None:
-    """Report progress over the MCP channel when a Context is present.
-
-    Long generations (native-4K Gemini, OpenAI backoff retries) take 30-60s+
-    and look hung to the client without this. No-op when ctx is None (e.g.
-    direct unit-test calls), and best-effort: a progress/log failure never
-    aborts generation.
-
-    Closed/broken-stream writes (a timed-out streamable-HTTP session, CDI-1253)
-    are swallowed at debug specifically — they must NOT bubble up and tear the
-    session down, because the render is still running and the artifact will be
-    written + indexed (recoverable via `list_recent_generations`).
-
-    ``on_closed_stream`` (CDI-1264): an optional callback invoked when — and only
-    when — a closed/broken stream is swallowed. The generation path uses it to
-    flag that delivery was torn down so the outcome ledger can record the render
-    as ``success`` + ``delivery='teardown_closed_stream'`` (truthful: the image
-    succeeded, the caller just never received the notification).
-    """
-    if ctx is None:
-        return
-    try:
-        await ctx.report_progress(progress=progress, total=total, message=message)
-    except _CLOSED_STREAM_ERRORS:  # pragma: no cover — session closed mid-render
-        logger.debug("ctx.report_progress: session stream closed; ignoring", exc_info=True)
-        if on_closed_stream is not None:
-            on_closed_stream()
-    except Exception:  # pragma: no cover — telemetry must never break generation
-        logger.debug("ctx.report_progress failed", exc_info=True)
-
-
-async def _info(
-    ctx: Context | None,
-    message: str,
-    *,
-    on_closed_stream: Callable[[], None] | None = None,
-) -> None:
-    """Emit an info-level log over the MCP channel when a Context is present.
-
-    Guards the same closed/broken-stream case as :func:`_progress` (CDI-1253):
-    a ``ctx.info`` write to a timed-out session must not crash the still-running
-    tool call. ``on_closed_stream`` mirrors :func:`_progress` for ledger
-    delivery-state tracking (CDI-1264).
-    """
-    if ctx is None:
-        return
-    try:
-        await ctx.info(message)
-    except _CLOSED_STREAM_ERRORS:  # pragma: no cover — session closed mid-render
-        logger.debug("ctx.info: session stream closed; ignoring", exc_info=True)
-        if on_closed_stream is not None:
-            on_closed_stream()
-    except Exception:  # pragma: no cover — telemetry must never break generation
-        logger.debug("ctx.info failed", exc_info=True)
 
 
 async def _confirm_cost(
@@ -747,9 +670,7 @@ async def _dispatch_and_maybe_wait(
     brand: str | None,
     dimensions: str,
     sync_wait_seconds: float,
-    ctx: Context | None,
-    on_closed_stream: Callable[[], None] | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Dispatch a render coroutine DETACHED, then optionally inline-wait for it.
 
     This is the hybrid dispatch core (CDI-1266). It:
@@ -804,28 +725,12 @@ async def _dispatch_and_maybe_wait(
         # exception the synchronous path would have raised (preserving type).
         exc = task.exception()
         if exc is not None:
-            await _info(
-                ctx, f"Generation failed: {exc}", on_closed_stream=on_closed_stream
-            )
             raise exc
         return task.result()
 
     # Did not finish in time → return a job handle. The render continues on the
     # detached task; the caller polls get_image_result(job_id).
-    await _info(
-        ctx,
-        f"Render exceeds the {int(sync_wait_seconds)}s inline budget; "
-        f"returning job_id {job_id} — poll get_image_result.",
-        on_closed_stream=on_closed_stream,
-    )
-    return {
-        "job_id": job_id,
-        "status": "pending",
-        "poll_with": "get_image_result",
-        "model": model,
-        "brand_context": brand,
-        "dimensions": dimensions,
-    }
+    return _job_handle()
 
 
 def _read_reference_bytes(path: Path) -> bytes:
@@ -963,7 +868,7 @@ mcp = FastMCP(
     icons=[
         Icon(
             src="data:image/png;base64,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",
-            mimeType="image/png",
+            mime_type="image/png",
             sizes=["96x96"],
         ),
     ],
@@ -1033,13 +938,13 @@ async def _health_check_z(request: _SReq) -> _SResp:
 
 
 @mcp.tool(
-    annotations={
-        "title": "Generate Brand Image",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    }
+    annotations=ToolAnnotations(
+        title="Generate Brand Image",
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
+    )
 )
 @_with_sync_wait_doc
 async def generate_image(
@@ -1117,7 +1022,6 @@ async def generate_image(
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
     # ------------------------------------------------------------------
-    await _progress(ctx, 0, 5, "Resolving identity and brand context")
     pack: IdentityPack | None = get_pack_for_context(context)
     resolved_paths: list[Path] = []
     used_identity_pack = False
@@ -1125,17 +1029,10 @@ async def generate_image(
     if reference_images:
         # Caller-supplied refs bypass the resolver entirely (per spec).
         refs_bytes: list[bytes] = list(reference_images)
-        await _info(ctx, f"Using {len(refs_bytes)} caller-supplied reference image(s)")
     elif pack is not None:
         resolved_paths = resolve_identity_for_call(pack, prompt, include_dogs=include_dogs)
         refs_bytes = [_read_reference_bytes(p) for p in resolved_paths]
         used_identity_pack = bool(refs_bytes)
-        if used_identity_pack:
-            await _info(
-                ctx,
-                f"Resolved identity pack '{context}' -> "
-                f"{len(refs_bytes)} reference slot(s)",
-            )
     else:
         refs_bytes = []
 
@@ -1144,7 +1041,6 @@ async def generate_image(
     # Determine provider. Per the May 2026 brand collapse, FLUX/Recraft
     # hints raise ProviderTemporarilyDisabled; surface as a clean MCP
     # error rather than a 500.
-    await _progress(ctx, 1, 5, "Routing to image provider")
     try:
         selected_provider = route_model(
             context=context,
@@ -1154,15 +1050,14 @@ async def generate_image(
             intent="raster",
         )
     except ProviderTemporarilyDisabled as e:
-        await _info(ctx, f"Provider hint rejected: {e.message}")
-        return {
+        return GenerateImageResult(**{
             "error": {
                 "code": "PROVIDER_TEMPORARILY_DISABLED",
                 "provider": e.provider,
                 "replacement": e.replacement,
                 "message": e.message,
             },
-        }
+        })
     specific_model = _model_used(selected_provider, model)
 
     # Determine dimensions
@@ -1205,8 +1100,7 @@ async def generate_image(
     if not await _confirm_cost(
         ctx, what="Generating this image", estimated_cost_eur=est_cost, provider=selected_provider
     ):
-        await _info(ctx, "Image generation cancelled by user at cost confirmation")
-        return {
+        return GenerateImageResult(**{
             "cancelled": True,
             "response_mode": "cancelled",
             "brand_context": context,
@@ -1214,7 +1108,7 @@ async def generate_image(
             "dimensions": f"{w}x{h}",
             "model": specific_model or selected_provider,
             "estimated_cost_eur": est_cost,
-        }
+        })
 
     # --- Async dispatch+poll (CDI-1266) ---------------------------------
     # The render runs DETACHED from this request scope so it survives the
@@ -1229,20 +1123,9 @@ async def generate_image(
     )
     job_id = _ledger.new_request_id()
 
-    def _mark_torn_down() -> None:
-        # On the async path the render itself doesn't write to the stream, so a
-        # closed inline-wait notification doesn't taint the render's delivery
-        # state — this stays a no-op placeholder for the _info guard signature.
-        pass
 
     sync_wait = 0 if background else max(0, int(settings.sync_wait_seconds))
 
-    await _progress(
-        ctx, 2, 5,
-        f"Dispatching image render via {selected_provider} "
-        f"(inline-wait up to {sync_wait}s, else returns a job_id to poll)",
-        on_closed_stream=_mark_torn_down,
-    )
 
     def _coro_factory():
         return _render_image_job(
@@ -1275,19 +1158,9 @@ async def generate_image(
         brand=context,
         dimensions=f"{w}x{h}",
         sync_wait_seconds=sync_wait,
-        ctx=ctx,
-        on_closed_stream=_mark_torn_down,
     )
 
-    if dispatched.get("status") == "pending":
-        await _progress(
-            ctx, 5, 5, "Render dispatched (poll get_image_result)",
-            on_closed_stream=_mark_torn_down,
-        )
-        return dispatched
-
-    await _progress(ctx, 5, 5, "Done", on_closed_stream=_mark_torn_down)
-    return dispatched
+    return GenerateImageResult(**dispatched)
 
 
 DiagramFormatLiteral = Literal["flow", "sequence", "state"]
@@ -1295,13 +1168,13 @@ DiagramModelHint = Literal["openai", "gemini", "gpt-image-2", "nano-banana-pro"]
 
 
 @mcp.tool(
-    annotations={
-        "title": "Generate Brand Diagram",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    }
+    annotations=ToolAnnotations(
+        title="Generate Brand Diagram",
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
+    )
 )
 async def generate_diagram(
     format: DiagramFormatLiteral,
@@ -1363,35 +1236,34 @@ async def generate_diagram(
     )
 
     if not prompt and not mermaid:
-        return {
+        return GenerateDiagramResult(**{
             "error": {
                 "code": "INVALID_INPUT",
                 "message": "Provide exactly one of `prompt` or `mermaid`.",
             },
-        }
+        })
     if prompt and mermaid:
-        return {
+        return GenerateDiagramResult(**{
             "error": {
                 "code": "INVALID_INPUT",
                 "message": "Provide either `prompt` OR `mermaid`, not both.",
             },
-        }
+        })
 
-    await _progress(ctx, 0, 4, "Parsing diagram spec")
     parsed = None
     if mermaid:
         try:
             parsed = parse_mermaid(mermaid)
         except MermaidParseError as e:
-            return {
+            return GenerateDiagramResult(**{
                 "error": {
                     "code": "MERMAID_PARSE_ERROR",
                     "message": str(e),
                     "line": e.line,
                 },
-            }
+            })
         if parsed.format != format:
-            return {
+            return GenerateDiagramResult(**{
                 "error": {
                     "code": "MERMAID_FORMAT_MISMATCH",
                     "message": (
@@ -1400,32 +1272,30 @@ async def generate_diagram(
                         "or use a Mermaid source that matches."
                     ),
                 },
-            }
+            })
 
     # Route to provider (default gemini for diagrams).
-    await _progress(ctx, 1, 4, "Routing to diagram provider")
     try:
         selected_provider = route_model(
             model_hint=model_hint,
             intent="diagram",
         )
     except ProviderTemporarilyDisabled as e:
-        await _info(ctx, f"Provider hint rejected: {e.message}")
-        return {
+        return GenerateDiagramResult(**{
             "error": {
                 "code": "PROVIDER_TEMPORARILY_DISABLED",
                 "provider": e.provider,
                 "replacement": e.replacement,
                 "message": e.message,
             },
-        }
+        })
     except ValueError as e:
-        return {
+        return GenerateDiagramResult(**{
             "error": {
                 "code": "INVALID_MODEL_HINT",
                 "message": str(e),
             },
-        }
+        })
 
     specific_model = _model_used(selected_provider, model_hint)
 
@@ -1443,7 +1313,7 @@ async def generate_diagram(
             d_parts = dimensions.lower().replace(" ", "").split("x")
             w, h = int(d_parts[0]), int(d_parts[1])
         except (ValueError, IndexError):
-            return {
+            return GenerateDiagramResult(**{
                 "error": {
                     "code": "INVALID_DIMENSIONS",
                     "message": (
@@ -1451,7 +1321,7 @@ async def generate_diagram(
                         "(e.g. '1600x900')."
                     ),
                 },
-            }
+            })
     elif format == "sequence":
         w, h = 1200, 1600
     else:
@@ -1467,8 +1337,7 @@ async def generate_diagram(
     if not await _confirm_cost(
         ctx, what="Rendering this diagram", estimated_cost_eur=est_cost, provider=selected_provider
     ):
-        await _info(ctx, "Diagram generation cancelled by user at cost confirmation")
-        return {
+        return GenerateDiagramResult(**{
             "cancelled": True,
             "response_mode": "cancelled",
             "brand_context": "casey",
@@ -1477,23 +1346,15 @@ async def generate_diagram(
             "dimensions": f"{w}x{h}",
             "model": specific_model or selected_provider,
             "estimated_cost_eur": est_cost,
-        }
+        })
 
     # --- Async dispatch+poll (CDI-1266) — same detached-render contract as
     # generate_image. Diagrams always carry the casey brand context.
     job_id = _ledger.new_request_id()
 
-    def _mark_torn_down() -> None:
-        pass
 
     sync_wait = 0 if background else max(0, int(settings.sync_wait_seconds))
 
-    await _progress(
-        ctx, 2, 4,
-        f"Dispatching diagram render via {selected_provider} "
-        f"(inline-wait up to {sync_wait}s, else returns a job_id to poll)",
-        on_closed_stream=_mark_torn_down,
-    )
 
     def _coro_factory():
         return _render_diagram_job(
@@ -1516,8 +1377,6 @@ async def generate_diagram(
         brand="casey",
         dimensions=f"{w}x{h}",
         sync_wait_seconds=sync_wait,
-        ctx=ctx,
-        on_closed_stream=_mark_torn_down,
     )
 
     if dispatched.get("status") == "pending":
@@ -1525,23 +1384,17 @@ async def generate_diagram(
         # response is self-describing even before the render finishes.
         dispatched.setdefault("register", register)
         dispatched.setdefault("format", format)
-        await _progress(
-            ctx, 4, 4, "Render dispatched (poll get_image_result)",
-            on_closed_stream=_mark_torn_down,
-        )
-        return dispatched
 
-    await _progress(ctx, 4, 4, "Done", on_closed_stream=_mark_torn_down)
-    return dispatched
+    return GenerateDiagramResult(**dispatched)
 
 
 @mcp.tool(
-    annotations={
-        "title": "Engineer Image Prompt",
-        "readOnlyHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
+    annotations=ToolAnnotations(
+        title="Engineer Image Prompt",
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
 )
 async def generate_prompt(
     prompt: str,
@@ -1569,14 +1422,14 @@ async def generate_prompt(
             context=context, platform=platform, model_hint=model, intent="raster"
         )
     except ProviderTemporarilyDisabled as e:
-        return {
+        return GeneratePromptResult(**{
             "error": {
                 "code": "PROVIDER_TEMPORARILY_DISABLED",
                 "provider": e.provider,
                 "replacement": e.replacement,
                 "message": e.message,
             },
-        }
+        })
 
     parts = []
     if context:
@@ -1587,23 +1440,23 @@ async def generate_prompt(
 
     dimensions = get_dimensions(platform) if platform else (1200, 1200)
 
-    return {
+    return GeneratePromptResult(**{
         "engineered_prompt": "\n".join(parts),
         "model": selected_model,
         "dimensions": f"{dimensions[0]}x{dimensions[1]}",
         "brand_context": context,
         "register": register,
         "platform": platform,
-    }
+    })
 
 
 @mcp.tool(
-    annotations={
-        "title": "List Image Models",
-        "readOnlyHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
+    annotations=ToolAnnotations(
+        title="List Image Models",
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
 )
 async def list_models() -> ModelsResult:
     """[image] List active image generation providers and their capabilities.
@@ -1656,22 +1509,22 @@ async def list_models() -> ModelsResult:
     loaded = get_loaded_packs()
     identity_packs = {brand: True for brand in loaded}
 
-    return {
+    return ModelsResult(**{
         "providers": available,
         "disabled_providers": list(DISABLED_PROVIDERS),
         "identity_packs": identity_packs,
         "diagram_capable": ["openai", "gemini"],
         "diagram_formats": ["flow", "sequence", "state"],
-    }
+    })
 
 
 @mcp.tool(
-    annotations={
-        "title": "List Recent Generations",
-        "readOnlyHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
+    annotations=ToolAnnotations(
+        title="List Recent Generations",
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
 )
 async def list_recent_generations(
     limit: int = 20,
@@ -1742,23 +1595,23 @@ async def list_recent_generations(
     effective_limit = max(0, min(limit, 500))
     effective_offset = max(0, offset)
 
-    return {
+    return RecentGenerationsResult(**{
         "generations": generations,
         "total": total,
         "returned": len(generations),
         "limit": effective_limit,
         "offset": effective_offset,
         "brand": brand,
-    }
+    })
 
 
 @mcp.tool(
-    annotations={
-        "title": "Generation Outcome Stats",
-        "readOnlyHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
+    annotations=ToolAnnotations(
+        title="Generation Outcome Stats",
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
 )
 async def generation_stats(
     days: int | None = 30,
@@ -1808,7 +1661,7 @@ async def generation_stats(
     if since:
         since_dt = _ledger._parse_ts(since)
         if since_dt is None:
-            return {
+            return GenerationStatsResult(**{
                 "error": {
                     "code": "INVALID_SINCE",
                     "message": (
@@ -1816,26 +1669,26 @@ async def generation_stats(
                         "e.g. '2026-06-01T00:00:00Z'."
                     ),
                 },
-            }
+            })
 
     # An explicit `since` wins; otherwise fall back to the `days` window. When
     # `since` is provided we do NOT also apply `days`.
     effective_days = None if since_dt is not None else days
 
-    return _ledger.compute_stats(
+    return GenerationStatsResult(**_ledger.compute_stats(
         since=since_dt,
         days=effective_days,
         limit=limit,
-    )
+    ))
 
 
 @mcp.tool(
-    annotations={
-        "title": "Get Image Result",
-        "readOnlyHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
+    annotations=ToolAnnotations(
+        title="Get Image Result",
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
 )
 async def get_image_result(
     job_id: str,
@@ -1891,7 +1744,7 @@ async def get_image_result(
     if record is not None:
         out = record.to_status_dict()
         out["source"] = "registry"
-        return out
+        return GetImageResult(**out)
 
     # Registry miss → durable ledger fallback (recoverable across restarts /
     # workers). The ledger keys on request_id, which IS the job_id.
@@ -1899,7 +1752,7 @@ async def get_image_result(
     if led is not None:
         outcome = led.get("outcome")
         if outcome == "success":
-            return {
+            return GetImageResult(**{
                 "job_id": job_id,
                 "status": "done",
                 "hosted_url": led.get("hosted_url"),
@@ -1909,9 +1762,9 @@ async def get_image_result(
                 "latency_ms": led.get("latency_ms"),
                 "cost_estimate_eur": led.get("cost_estimate_eur"),
                 "source": "ledger",
-            }
+            })
         # Any non-success ledger outcome is a recorded failure.
-        return {
+        return GetImageResult(**{
             "job_id": job_id,
             "status": "error",
             "model": led.get("model"),
@@ -1920,24 +1773,24 @@ async def get_image_result(
             "error_category": led.get("error_category"),
             "latency_ms": led.get("latency_ms"),
             "source": "ledger",
-        }
+        })
 
     # Unknown everywhere. NOT an error — the caller can retry or fall back to
     # list_recent_generations to browse by metadata.
-    return {
+    return GetImageResult(**{
         "job_id": job_id,
         "status": "not_found",
         "source": "none",
-    }
+    })
 
 
 @mcp.tool(
-    annotations={
-        "title": "Get Visual Presets",
-        "readOnlyHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
+    annotations=ToolAnnotations(
+        title="Get Visual Presets",
+        read_only_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
 )
 async def get_visual_presets(
     context: BrandContext | None = None,
@@ -1958,7 +1811,7 @@ async def get_visual_presets(
 
     loaded = get_loaded_packs()
     if context:
-        return {
+        return VisualPresetsResult(**{
             "context": context,
             "register": register,
             "preset": get_preset(context, register=register),
@@ -1968,13 +1821,13 @@ async def get_visual_presets(
                 if context in {"casey", "@casey", "casey-berlin", "@casey.berlin"}
                 else context in loaded
             ),
-        }
-    return {
+        })
+    return VisualPresetsResult(**{
         "presets": PRESETS,
         "casey_register_overlays": CASEY_REGISTER_OVERLAYS,
         "platforms": PLATFORM_SIZES,
         "identity_packs": {brand: True for brand in loaded},
-    }
+    })
 
 
 # --- Resources: brand reference data ------------------------------------
@@ -2034,7 +1887,7 @@ def resource_platforms() -> dict:
 )
 async def resource_models() -> dict:
     """Same payload as the list_models tool, addressable as a resource."""
-    return await list_models.fn()
+    return (await list_models()).model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 @mcp.resource(
@@ -2316,15 +2169,7 @@ def main() -> None:
     if settings.transport == "http":
         # stateless_http=True → eliminates orphaned SSE sessions after CF
         # kills idle connections. See openspec mcp-stateless-transport.
-        # fastmcp 3.4.3 added DNS-rebinding Host validation → 421 for any non-localhost
-        # Host header. This server is fronted by img.cdit-works.de + mcp-bildsprache.cdit-dev.de
-        # behind Cloudflare Access + Tailscale (the edge already gates access), so allow all
-        # Hosts. Matches the stolperstein fleet pattern (allowed_hosts="*").
-        app = mcp.http_app(
-            transport="streamable-http",
-            stateless_http=True,
-            allowed_hosts=["*"],
-        )
+        app = mcp.http_app(transport="streamable-http", stateless_http=True)
         _install_cf_access_middleware(app)
         _mount_gallery(app)
         _mount_static_files(app)

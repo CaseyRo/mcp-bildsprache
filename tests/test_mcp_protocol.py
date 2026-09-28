@@ -21,11 +21,6 @@ EXPECTED_TOOLS = {
 }
 
 
-def _hint(annotations, snake: str, camel: str):
-    # fastmcp 3 exposes camelCase, 4 snake_case; read whichever exists.
-    return getattr(annotations, snake, getattr(annotations, camel, None))
-
-
 @pytest.mark.asyncio
 async def test_server_registers_its_tools():
     async with Client(mcp) as client:
@@ -39,9 +34,9 @@ async def test_read_only_annotations_survive_the_wire():
         tools = {t.name: t for t in await client.list_tools()}
     ann = tools["get_visual_presets"].annotations
     assert ann is not None
-    assert _hint(ann, "read_only_hint", "readOnlyHint") is True
-    assert _hint(ann, "open_world_hint", "openWorldHint") is False
-    assert _hint(tools["generate_image"].annotations, "read_only_hint", "readOnlyHint") is False
+    assert ann.read_only_hint is True
+    assert ann.open_world_hint is False
+    assert tools["generate_image"].annotations.read_only_hint is False
 
 
 @pytest.mark.asyncio
@@ -66,7 +61,7 @@ async def test_a_tool_call_writes_one_usage_line(capsys):
 async def test_generate_image_surface_drops_dead_hints():
     async with Client(mcp) as client:
         tools = {t.name: t for t in await client.list_tools()}
-    props = tools["generate_image"].inputSchema["properties"]
+    props = tools["generate_image"].input_schema["properties"]
     assert "draft" not in props
     enum = props["model"]["anyOf"][0]["enum"]
     assert "gpt-image-2" in enum
@@ -91,3 +86,21 @@ async def test_stale_portal_args_are_ignored_not_rejected():
     assert result.is_error
     assert "Invalid dimensions" in result.content[0].text
     boom.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_models_serialise_by_alias_over_the_wire():
+    # Tools return models; `register_` must still reach clients as `register`.
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "generate_prompt", {"prompt": "x", "context": "casey", "register": "personal"}
+        )
+    assert result.structured_content["register"] == "personal"
+    assert "register_" not in result.structured_content
+
+
+@pytest.mark.asyncio
+async def test_models_resource_reads():
+    async with Client(mcp) as client:
+        contents = await client.read_resource("bildsprache://models")
+    assert '"diagram_formats"' in contents[0].text
