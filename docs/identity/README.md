@@ -58,11 +58,8 @@ memory for the life of the container. Edit, then restart to pick up changes.
 
 ## Slot names
 
-Slot names are free-form, with one exception: the slots that the
-`include_dogs` override controls are listed in
-`mcp_bildsprache/identity.py` (`DOG_SLOT_NAMES`), so a manifest that wants
-that override must use those names. Every other slot follows
-`include_people`.
+Slot names are free-form. A slot whose `tags` include `dog` follows the
+`include_dogs` override; every other slot follows `include_people`.
 
 ## File conventions
 
