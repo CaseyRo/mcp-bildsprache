@@ -192,6 +192,7 @@ def _record_generation_attempt(
     hosted_url: str | None = None,
     cost_estimate_eur: float | None = None,
     delivery: str | None = None,
+    model_reason: str | None = None,
 ) -> None:
     """Write exactly one ledger line for a generation attempt. Best-effort.
 
@@ -216,6 +217,7 @@ def _record_generation_attempt(
             hosted_url=hosted_url,
             cost_estimate_eur=cost_estimate_eur,
             delivery=delivery,  # type: ignore[arg-type]
+            extra={"model_reason": model_reason} if model_reason else None,
         )
         _ledger.append_record(record)
     except Exception:  # pragma: no cover — ledger must never break generation
@@ -308,8 +310,27 @@ def _model_used(provider: str, hint: str | None) -> str | None:
     (``openai``, a retired hint, none) means ``settings.openai_image_model``.
     """
     if provider == "openai":
-        return hint if hint in OPENAI_MODELS else settings.openai_image_model
+        return hint if hint in OPENAI_MODELS else (settings.openai_image_model or "gpt-image-2")
     return hint if hint and hint != provider else None
+
+
+def _pick_raster_model(
+    provider: str, hint: str | None, *, identity_scene: bool
+) -> tuple[str | None, str]:
+    """generate_image's model and a short why.
+
+    Explicit model > OPENAI_IMAGE_MODEL > the default split (Casey, 2026-09-28
+    A/B): identity scenes (person/dog refs attached) get gpt-image-2, since
+    gpt-image-2.5-flare drew Casey twice in 1 of 3; everything else gets flare
+    at ~half the price.
+    """
+    if provider != "openai" or hint in OPENAI_MODELS:
+        return _model_used(provider, hint), "explicit model"
+    if settings.openai_image_model:
+        return settings.openai_image_model, "OPENAI_IMAGE_MODEL set"
+    if identity_scene:
+        return "gpt-image-2", "identity scene: gpt-image-2 keeps one Casey"
+    return "gpt-image-2.5-flare", "no identity refs: flare default (~half price)"
 
 
 def _with_sync_wait_doc(fn):
@@ -337,6 +358,7 @@ async def _render_image_job(
     include_dogs: bool | None,
     est_cost: float | None,
     openai_options: dict[str, Any] | None = None,
+    model_reason: str | None = None,
 ) -> dict[str, Any]:
     """Run the raster render+store pipeline and return the result dict.
 
@@ -379,6 +401,7 @@ async def _render_image_job(
             error_category=category,
             error_message=str(e),
             cost_estimate_eur=est_cost,
+            model_reason=model_reason,
         )
         registry.mark_error(job_id, error=str(e), error_category=category)
         raise
@@ -405,6 +428,7 @@ async def _render_image_job(
 
     result: dict = {
         "model": provider_result.model,
+        "model_reason": model_reason,
         "cost_estimate": format_legacy_cost_estimate(attribution),
         "brand_context": context,
         "platform": platform,
@@ -452,6 +476,7 @@ async def _render_image_job(
             error_category=category,
             error_message=str(e),
             cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
+            model_reason=model_reason,
         )
         registry.mark_error(job_id, error=str(e), error_category=category)
         raise
@@ -501,6 +526,7 @@ async def _render_image_job(
         hosted_url=hosted_url,
         cost_estimate_eur=(cost_block or {}).get("amount_eur"),
         delivery="delivered",
+        model_reason=model_reason,
     )
     registry.mark_done(job_id, result)
     return result
@@ -990,8 +1016,10 @@ async def generate_image(
     handle, poll ``get_image_result`` rather than treating the absence of
     ``hosted_url`` as a failure.
 
-    Active providers (May 2026 brand collapse): OpenAI gpt-image-2 (default
-    raster; gpt-image-2.5-flare / -sunburst selectable) and Gemini Nano Banana. FLUX and Recraft are
+    Default model (no ``model``, no ``OPENAI_IMAGE_MODEL``): identity scenes
+    (identity-pack person/dog refs or caller ``reference_images``) render on
+    gpt-image-2; everything else on the cheaper gpt-image-2.5-flare. The result's
+    ``model_reason`` says which rule applied. Gemini Nano Banana is also active. FLUX and Recraft are
     temporarily disabled at the dispatcher; hinting at them raises
     ``PROVIDER_TEMPORARILY_DISABLED``.
 
@@ -1005,9 +1033,9 @@ async def generate_image(
                   manifesto-adjacent) or ``professional`` (verification,
                   workshop voice). Defaults to ``professional`` for casey
                   when omitted.
-        model: Force a provider/model. OpenAI: ``gpt-image-2`` (default),
+        model: Force a provider/model (always wins). OpenAI: ``gpt-image-2``,
                 ``gpt-image-2.5-flare`` (fast everyday), ``gpt-image-2.5-sunburst``
-                (premium, editing precision); ``openai`` = the server default.
+                (premium, editing precision); ``openai`` = the server default split.
                 ``gemini`` for Nano Banana. Disabled hints (``flux``,
                 ``recraft``, ``flux-*``) raise PROVIDER_TEMPORARILY_DISABLED.
         platform: Target platform (linkedin-post, blog-hero, etc.) for auto-sizing.
@@ -1070,7 +1098,9 @@ async def generate_image(
                 "message": e.message,
             },
         })
-    specific_model = _model_used(selected_provider, model)
+    specific_model, model_reason = _pick_raster_model(
+        selected_provider, model, identity_scene=has_refs
+    )
     if quality is not None or transparent:
         if selected_provider != "openai":
             raise ValueError("quality and transparent apply to OpenAI models only")
@@ -1130,6 +1160,7 @@ async def generate_image(
             "platform": platform,
             "dimensions": f"{w}x{h}",
             "model": specific_model or selected_provider,
+            "model_reason": model_reason,
             "estimated_cost_eur": est_cost,
         })
 
@@ -1169,6 +1200,7 @@ async def generate_image(
             include_dogs=include_dogs,
             est_cost=est_cost,
             openai_options=openai_options,
+            model_reason=model_reason,
         )
 
     # On a fast failure _dispatch_and_maybe_wait re-raises the render's exact
@@ -1183,6 +1215,7 @@ async def generate_image(
         dimensions=f"{w}x{h}",
         sync_wait_seconds=sync_wait,
     )
+    dispatched.setdefault("model_reason", model_reason)
 
     return GenerateImageResult(**dispatched)
 
@@ -1495,14 +1528,18 @@ async def list_models() -> ModelsResult:
     available = []
 
     if settings.openai_api_key.get_secret_value():
-        # model= picks per call; OPENAI_IMAGE_MODEL is the default.
+        # model= picks per call; OPENAI_IMAGE_MODEL forces one; else the split.
         available.append({
             "id": "openai",
             "name": "OpenAI gpt-image",
             "models": list(OPENAI_MODELS),
-            "default": settings.openai_image_model,
+            "default": settings.openai_image_model
+            or "gpt-image-2 for identity scenes, else gpt-image-2.5-flare",
             "best_for": (
-                "Default raster path. Strong typography in-image, "
+                "Default raster path. Without a model hint, identity scenes "
+                "(person/dog reference images) use gpt-image-2 (one Casey per "
+                "frame) and everything else gpt-image-2.5-flare (~half the price). "
+                "Strong typography in-image, "
                 "sibling-series consistency, reference image support. "
                 "gpt-image-2.5-flare is fast; gpt-image-2.5-sunburst is the "
                 "premium/editing model (both add xhigh/max quality and "

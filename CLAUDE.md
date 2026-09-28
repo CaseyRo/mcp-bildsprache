@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-FastMCP server that exposes brand-aware image generation as MCP tools. The active dispatched providers are OpenAI (gpt-image-2 raster default at medium quality; `model` can pick `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` per call, with `quality` and `transparent` options) and Google Gemini (Nano Banana Pro `gemini-3-pro-image-preview` for diagrams + Nano Banana 2 `gemini-3.1-flash-image-preview` raster fallback). Black Forest Labs FLUX and Recraft V4.1 remain in-tree but disabled at the dispatcher. It injects a brand visual preset, generates via the provider API, then runs a post-processing pipeline (resize/crop → WebP → EXIF provenance) and stores the result on disk to be served under `https://img.cdit-works.de`.
+FastMCP server that exposes brand-aware image generation as MCP tools. The active dispatched providers are OpenAI (raster default at medium quality: gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise, via `server.py::_pick_raster_model`; `OPENAI_IMAGE_MODEL` forces one; `model` can pick `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` per call, with `quality` and `transparent` options) and Google Gemini (Nano Banana Pro `gemini-3-pro-image-preview` for diagrams + Nano Banana 2 `gemini-3.1-flash-image-preview` raster fallback). Black Forest Labs FLUX and Recraft V4.1 remain in-tree but disabled at the dispatcher. It injects a brand visual preset, generates via the provider API, then runs a post-processing pipeline (resize/crop → WebP → EXIF provenance) and stores the result on disk to be served under `https://img.cdit-works.de`.
 
 ### MCP tool surface
 
