@@ -2,7 +2,7 @@
 
 `mcp-bildsprache` currently turns a text prompt + brand context into a generated image through a fixed pipeline: `route_model` → `get_preset` → provider call → post-process → store. Everything between "prompt" and "bytes" is text-only. The provider modules (`gemini.py`, `bfl.py`, `recraft.py`) accept `(prompt, width, height)` and return `ProviderResult` — no image inputs anywhere.
 
-That text-only assumption was fine when every brand's visual DNA could be expressed as a descriptive preset string. It breaks for `@casey.berlin`, because a personal brand requires identity fidelity, and no amount of text ("man in his late thirties, short brown hair…") gets a diffusion model to reliably render *Casey* or his two Stabyhoun dogs (Fimme, Sien).
+That text-only assumption was fine when every brand's visual DNA could be expressed as a descriptive preset string. It breaks for `@casey.berlin`, because a personal brand requires identity fidelity, and no amount of text ("man in his late thirties, short brown hair…") gets a diffusion model to reliably render *Casey* or his two dogs.
 
 The three providers diverge sharply in reference-image support:
 
@@ -172,7 +172,7 @@ If `/data/identity/casey-berlin/manifest.json` is absent or unparseable:
 ## Migration Plan
 
 1. Land code changes on a feature branch; merge to `main` — CI cuts a new version automatically.
-2. On the production host (`ubuntu-smurf-mirror`), add the `identity-data` volume to `compose.yaml` and recreate the container.
+2. On the production host (the production host), add the `identity-data` volume to `compose.yaml` and recreate the container.
 3. Upload the `@casey.berlin` manifest + reference images to the volume (scp over Tailscale).
 4. Restart the container so the manifest is loaded; tail logs to confirm `identity_pack_loaded=True` for `@casey.berlin`.
 5. Issue a smoke `generate_image` call with `context="@casey.berlin", prompt="morning walk through the forest"` and confirm: (a) provider used is `flux-kontext-pro` or `gemini`, (b) returned WebP contains recognizable identity signal, (c) `cost_estimate` reflects the model actually used.

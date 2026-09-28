@@ -118,7 +118,7 @@ The `casey` preset injects the locked botanical palette from the 7 May 2026 bran
 - `model_hint="flux"` / `"flux-*"` / `"recraft"` → raises `ProviderTemporarilyDisabled`. The replacement message names the active provider for the caller's intent (openai for raster, gemini for diagram).
 - The FLUX/Recraft modules were deleted on 2026-06-30 (only the rejection remains). Re-adding a provider means a new `providers/` module plus a `PROVIDERS` entry in `server.py`.
 
-Tier 1 OpenAI rate-limit posture: existing `_post_with_backoff` (1s/4s/10s + jitter) absorbs 429s. Sequential dispatch — no parallel fan-out in v1. `event=image_generated` and `event=diagram_generated` log lines support cost aggregation via Komodo log queries.
+Tier 1 OpenAI rate-limit posture: existing `_post_with_backoff` (1s/4s/10s + jitter) absorbs 429s. Sequential dispatch — no parallel fan-out in v1. `event=image_generated` and `event=diagram_generated` log lines support cost aggregation via container log queries.
 
 ### Diagram tool (`generate_diagram`)
 
@@ -130,7 +130,7 @@ Tier 1 OpenAI rate-limit posture: existing `_post_with_backoff` (1s/4s/10s + jit
 
 ### Identity packs
 
-Brand presets handle *visual DNA* (palette, mood, composition). Identity packs handle *personal likeness* for the casey brand (Casey + his two Stabyhoun dogs, Fimme and Sien).
+Brand presets handle *visual DNA* (palette, mood, composition). Identity packs handle *personal likeness* for the casey brand (a person plus companion animals).
 
 Identity packs live on the `identity-data` Docker volume, mounted **read-only** at `/data/identity/<brand-dir>/`. Each brand has its own `manifest.json` plus reference images. Nothing identity-related is committed to this repo — see `docs/identity/README.md` for the volume contract and `docs/identity/manifest.example.json` for the schema.
 
@@ -170,14 +170,14 @@ In HTTP mode, `server.py::main()` calls `mcp.http_app(transport="streamable-http
 
 The index lives in memory (`gallery/index.py::GalleryIndex`), built by walking JSON sidecars. It's rebuilt on Starlette startup (blocking), on a background timer (`GALLERY_REINDEX_INTERVAL_SECONDS`, default 300), and on demand via the reindex endpoint. There is no database and no file watcher.
 
-Auth is hostname-based: `gallery/middleware.py::TailnetOnlyMiddleware` rejects `/gallery/*` requests whose `Host` header doesn't match `GALLERY_TAILNET_HOSTNAME` with HTTP 404 (not 403 — don't advertise existence). Production hostname: `bildsprache.onca-blenny.ts.net` (set via the docktail `service.name=bildsprache` label in `compose.yaml` plus `GALLERY_TAILNET_HOSTNAME` env). When the env var is unset, the middleware is a no-op and logs one startup WARN. Other paths (`/mcp`, `/<brand>/*.webp`) are never gated. The container is exposed on the Tailnet by docktail (Tailscale serve via labels) — no separate `tailscale serve` config required.
+Auth is hostname-based: `gallery/middleware.py::TailnetOnlyMiddleware` rejects `/gallery/*` requests whose `Host` header doesn't match `GALLERY_TAILNET_HOSTNAME` with HTTP 404 (not 403 — don't advertise existence). The production hostname comes from the docktail `service.name` label in `compose.yaml` plus the `GALLERY_TAILNET_HOSTNAME` env. When the env var is unset, the middleware is a no-op and logs one startup WARN. Other paths (`/mcp`, `/<brand>/*.webp`) are never gated. The container is exposed on the Tailnet by docktail (Tailscale serve via labels) — no separate `tailscale serve` config required.
 
 Bulk download is client-side: the frontend `fetch`es selected WebPs, feeds them to the vendored `fflate` (`gallery/static/fflate.min.js`, version pinned — see the neighboring `README.md` for SHA-256), and triggers a single Blob URL download. This is what makes it work on iOS Safari.
 
 ### Auth (HTTP mode only)
 
 `auth.py::create_auth` returns a `MultiAuth` composed of:
-- **OIDCProxy** for Keycloak (realm `cdit-mcp`, audience `mcp-bildsprache`) — this is the path Claude.ai connectors take. No DCR; credentials are pre-registered.
+- **OIDCProxy** for Keycloak (issuer and audience from `KEYCLOAK_*` settings) — this is the path Claude.ai connectors take. No DCR; credentials are pre-registered.
 - **BearerTokenVerifier** for a static API key prefixed `bmcp_` — used by Claude Code, n8n, scripts.
 
 Auth in HTTP mode is **fail-fast** (see commit `c637e42`): `_build_auth()` reads **only** `MCP_BILDSPRACHE_API_KEY` (the fleet's one sanctioned exception to `MCP_API_KEY`; the stack's `MCP_API_KEY` var is ignored) and raises `SystemExit` if it is unset, rather than silently running unauthenticated. `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` add a Cloudflare Access JWT verifier alongside the bearer. If `KEYCLOAK_CLIENT_SECRET` is set, the server returns the full `MultiAuth` (Keycloak + bearer); if only the API key is set, the server returns a `BearerTokenVerifier` alone (the current production shape post-Keycloak-decommission).
@@ -195,7 +195,7 @@ Stdio mode skips auth entirely.
 
 ## Production deployment
 
-The server runs on the `nebula-1` host as a Docker compose stack `git-mcp-bildsprache-nebula` (container `git-mcp-bildsprache-nebula-mcp-bildsprache-1`), port `8007` → container `8000`. Static images hosted at `https://img.cdit-works.de`; MCP endpoint at `https://mcp-bildsprache.cdit-dev.de/mcp`. `FASTMCP_HOME=/data/fastmcp` and two named volumes (`fastmcp-data`, `images-data`) persist state. The stack uses `build: .` rather than pulling from ghcr — the release workflow still publishes images to `ghcr.io/caseyro/mcp-bildsprache` but production builds from its clone on each deploy. `/health` therefore reports the static `pyproject.toml` version (it lags the tags) plus `git_commit`, which a Dockerfile stage reads from the clone's `.git`; that commit is what identifies a deploy.
+Production runs the `compose.yaml` stack on a single Docker host, built from a git clone (`build: .`) on each deploy; the GHCR image from the release workflow is not used. Stored images are served from the public image domain (`IMAGE_DOMAIN`) and the MCP endpoint is `<public-host>/mcp`. `FASTMCP_HOME=/data/fastmcp` and two named volumes (`fastmcp-data`, `images-data`) persist state. `/health` reports the static `pyproject.toml` version (it lags the tags) plus `git_commit`, which a Dockerfile stage reads from the clone's `.git`; that commit is what identifies a deploy.
 
 ## Single source of truth
 

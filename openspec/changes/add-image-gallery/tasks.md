@@ -99,8 +99,8 @@
 - [ ] 13.3 Set `GALLERY_TAILNET_HOSTNAME=<hostname>` in the stack env
 - [ ] 13.4 Recreate the stack; tail logs for the first reindex success line
 - [ ] 13.5 Verify from a Tailnet-connected device: `GET /gallery/` → 200 HTML
-- [ ] 13.6 Verify from the public hostname: `GET https://bildsprache.cdit-dev.de/gallery/` → 404 (must NOT be 200)
-- [ ] 13.7 Verify `GET https://bildsprache.cdit-dev.de/mcp` → unchanged behavior
+- [ ] 13.6 Verify from the public hostname: `GET https://<public-host>/gallery/` → 404 (must NOT be 200)
+- [ ] 13.7 Verify `GET https://<public-host>/mcp` → unchanged behavior
 - [ ] 13.8 Verify `GET https://img.cdit-works.de/<brand>/<existing>.webp` → unchanged behavior
 - [ ] 13.9 Manual UX pass on iOS Safari: browse, filter, select 3-5, download ZIP, confirm single `.zip` lands in Files
 - [ ] 13.10 Manual UX pass on desktop: keyboard shortcuts, grid↔list toggle, URL-reload reproduces state

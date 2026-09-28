@@ -17,7 +17,7 @@ The `/gallery/*` path prefix MUST be reachable only via the Tailnet-only hostnam
 
 #### Scenario: Public hostname rejects gallery requests
 
-- **WHEN** an HTTP request is made to `https://bildsprache.cdit-dev.de/gallery/` with the public `Host` header
+- **WHEN** an HTTP request is made to `https://<public-host>/gallery/` with the public `Host` header
 - **THEN** the server MUST respond with HTTP 400 or 404
 - **AND** the response MUST NOT include HTML gallery content
 

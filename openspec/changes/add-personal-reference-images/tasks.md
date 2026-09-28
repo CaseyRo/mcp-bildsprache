@@ -98,7 +98,7 @@
 ## 13. Deploy
 
 - [ ] 13.1 Merge to `main`; let CI cut a release tag + image
-- [ ] 13.2 On `ubuntu-smurf-mirror`: pull new image, add `identity-data` volume to the running compose stack, recreate container
+- [ ] 13.2 On the production host: pull new image, add `identity-data` volume to the running compose stack, recreate container
 - [ ] 13.3 scp over Tailscale: upload `@casey.berlin` manifest + reference images to the volume
 - [ ] 13.4 Restart container; confirm startup log shows `identity_pack_loaded=True brand="@casey.berlin" slots=["casey","fimme","sien"]`
 - [ ] 13.5 Smoke test: `generate_image context="@casey.berlin" prompt="morning walk through the forest"` — verify provider is `flux-kontext-pro` or `gemini`, cost reflects that, and the result carries recognizable identity
