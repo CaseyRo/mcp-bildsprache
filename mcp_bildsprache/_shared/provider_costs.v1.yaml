@@ -25,6 +25,25 @@ openai:
     usd_per_1m_output_tokens: 30.00
     batch_discount: 0.50             # batch tier: $4 in / $15 out
     partial_image_tokens: 100        # each streamed partial adds this to output tokens
+  # GPT Image 2.5 (2026-09-08 snapshots): token rates match gpt-image-2.
+  # Text input is $5/1M on the model pages; compute_cost has no text-input
+  # split, so all input bills at the image rate here (as for gpt-image-2).
+  gpt-image-2.5-flare:              # fast, the intended default
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 8.00
+    usd_per_1m_cached_input_tokens: 2.00
+    usd_per_1m_text_input_tokens: 5.00
+    usd_per_1m_output_tokens: 30.00
+    batch_discount: 0.50
+  gpt-image-2.5-sunburst:           # premium / editing precision
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 8.00
+    usd_per_1m_cached_input_tokens: 2.00
+    usd_per_1m_text_input_tokens: 5.00
+    usd_per_1m_output_tokens: 30.00
+    batch_discount: 0.50
   gpt-image-1.5:
     mode: per-token-usage
     kind: image

@@ -487,10 +487,13 @@ class TestOtherTools:
         assert result["diagram_capable"] == ["openai", "gemini"]
         assert set(result["diagram_formats"]) == {"flow", "sequence", "state"}
 
-        # openai advertises only the model the provider actually pins; gemini
-        # advertises Nano Banana Pro + Nano Banana 2, NOT gemini-2.5-flash-image.
+        # openai advertises the selectable models; gemini advertises Nano
+        # Banana Pro + Nano Banana 2, NOT gemini-2.5-flash-image.
         by_id = {m["id"]: m for m in providers}
-        assert by_id["openai"]["models"] == ["gpt-image-2"]
+        assert by_id["openai"]["models"] == [
+            "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"
+        ]
+        assert by_id["openai"]["default"] == "gpt-image-2"
         assert "gemini-3-pro-image-preview" in by_id["gemini"]["models"]
         assert "gemini-3.1-flash-image-preview" in by_id["gemini"]["models"]
         assert "gemini-2.5-flash-image" not in by_id["gemini"]["models"]
@@ -1171,6 +1174,58 @@ class TestGenerationLedgerWiring:
         assert rec["brand"] == "casey"
         assert rec["model"] == "gpt-image-2"
         assert "latency_ms" in rec
+
+    @pytest.mark.anyio
+    async def test_selected_25_model_reaches_provider_and_ledger(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from mcp_bildsprache import ledger as ledmod
+        from mcp_bildsprache.server import generate_image
+
+        ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
+
+        async def fake_openai(prompt, w, h, **kw):
+            return _fake_provider_result(model=kw["model"])
+
+        provider = AsyncMock(side_effect=fake_openai)
+        with patch("mcp_bildsprache.server.PROVIDERS", {"openai": provider, "gemini": provider}), \
+             patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            s.enable_hosting = True
+            s.openai_image_model = "gpt-image-2"
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+
+            result = _d(await generate_image(
+                prompt="flare", dimensions="1024x1024", model="gpt-image-2.5-flare",
+                quality="max", transparent=True,
+            ))
+
+        kw = provider.await_args.kwargs
+        assert (kw["model"], kw["quality"], kw["background"]) == (
+            "gpt-image-2.5-flare", "max", "transparent"
+        )
+        assert result["model"] == "gpt-image-2.5-flare"
+        assert ledmod.read_records(path=ledger_file)[0]["model"] == "gpt-image-2.5-flare"
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("kwargs, match", [
+        ({"model": "gpt-image-2", "quality": "max"}, "does not support quality"),
+        ({"quality": "xhigh"}, "does not support quality"),  # default gpt-image-2
+        ({"model": "gpt-image-2", "transparent": True}, "transparent"),
+        ({"model": "gemini", "quality": "high"}, "OpenAI models only"),
+    ])
+    async def test_invalid_openai_options_rejected_before_any_call(self, kwargs, match):
+        from mcp_bildsprache.server import generate_image
+
+        boom = AsyncMock(side_effect=AssertionError("provider must not be called"))
+        with patch("mcp_bildsprache.server.PROVIDERS", {"openai": boom, "gemini": boom}), \
+             patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"):
+            with pytest.raises(ValueError, match=match):
+                await generate_image(prompt="x", dimensions="1024x1024", **kwargs)
+        boom.assert_not_called()
 
     @pytest.mark.anyio
     async def test_closed_stream_records_success_delivered_on_async_path(

@@ -104,3 +104,15 @@ async def test_models_resource_reads():
     async with Client(mcp) as client:
         contents = await client.read_resource("bildsprache://models")
     assert '"diagram_formats"' in contents[0].text
+
+
+@pytest.mark.asyncio
+async def test_gpt_image_25_models_and_quality_on_the_surface():
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    for name in ("generate_image", "generate_prompt"):
+        enum = tools[name].input_schema["properties"]["model"]["anyOf"][0]["enum"]
+        assert {"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} <= set(enum)
+    props = tools["generate_image"].input_schema["properties"]
+    assert set(props["quality"]["anyOf"][0]["enum"]) == {"low", "medium", "high", "xhigh", "max", "auto"}
+    assert "transparent" in props
