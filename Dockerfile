@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+# ca-certificates: httpx2 (fastmcp 4) uses the OS trust store.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md ./

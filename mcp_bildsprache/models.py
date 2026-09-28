@@ -4,19 +4,12 @@ These Pydantic models exist so FastMCP can advertise an ``output_schema``
 for each tool — giving clients a machine-readable, introspectable contract
 for the response shape (hosted URL, model, cost, attribution, ...).
 
-Backward-compatibility note: every model sets ``extra="allow"`` and the
-tool bodies continue to return plain ``dict`` values. FastMCP serializes
-those dicts against the model schema without re-validating, so:
-
-* the documented top-level fields are published in the schema, and
-* conditional / legacy extras the tools already emit (``error`` blocks,
-  ``fallback_used`` / ``intended_provider`` / ``fallback_reason``,
-  ``raw_url`` / ``raw_mime_type``, ``identity_pack_loaded``, ...) still
-  pass through verbatim via ``additionalProperties: true``.
-
-This keeps the existing live clients and the manually-synced Cloudflare
-portal working — no top-level field is renamed or removed — while
-upgrading the tools from "untyped dict" to "typed structured output".
+Tools return instances of these models (fastmcp 4 warns on a bare ``dict``
+against a BaseModel return type). Every model sets ``extra="allow"``, so the
+conditional / legacy extras the tools emit (``error`` blocks, ``job_id`` /
+``status`` / ``poll_with``, ``raw_url``, ...) pass through verbatim. Models with
+a ``register_`` field serialise by alias, so the wire key stays ``register``.
+Unset optional fields now go out as explicit ``null``.
 """
 
 from __future__ import annotations
@@ -98,8 +91,8 @@ class GenerateDiagramResult(BaseModel):
 
     # ``populate_by_name`` lets the `register_` field accept/emit the wire
     # name ``register`` (which shadows BaseModel.register, so it can't be a
-    # bare attribute name). The tools return plain dicts keyed ``register``.
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    # bare attribute name). ``serialize_by_alias`` keeps ``register`` on the wire.
+    model_config = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
 
     hosted_url: Optional[str] = Field(
         default=None, description="Public URL of the processed diagram WebP, or omitted on error."
@@ -136,7 +129,7 @@ class GenerateDiagramResult(BaseModel):
 class GeneratePromptResult(BaseModel):
     """Structured result of :func:`generate_prompt` (no provider call)."""
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
 
     engineered_prompt: Optional[str] = Field(
         default=None, description="The brand-injected prompt that would be sent to the provider."
@@ -335,7 +328,7 @@ class VisualPresetsResult(BaseModel):
     ``platforms`` + ``identity_packs``).
     """
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
 
     context: Optional[str] = Field(default=None, description="Brand context requested (single-context shape).")
     register_: Optional[str] = Field(

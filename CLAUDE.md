@@ -157,7 +157,7 @@ Slug collisions (same prompt+dimensions+brand) get a 4-hex suffix derived from i
 
 ### HTTP serving
 
-In HTTP mode, `server.py::main()` calls `mcp.http_app(transport="http")` (FastMCP 3.2.x API) and then `_mount_static_files(app)` mounts `/data/images` at `/`. This is what makes hosted URLs like `https://img.cdit-works.de/cdit/foo-1200x630.webp` resolve. The `/mcp` path is reserved for the MCP protocol. `mimetypes.add_type("image/webp"/".avif")` is needed because `python:3.12-slim` does not register them by default (see commit `406df0c`).
+In HTTP mode, `server.py::main()` calls `mcp.http_app(transport="streamable-http", stateless_http=True)` (FastMCP 4) and then `_mount_static_files(app)` mounts `/data/images` at `/`. This is what makes hosted URLs like `https://img.cdit-works.de/cdit/foo-1200x630.webp` resolve. The `/mcp` path is reserved for the MCP protocol. `mimetypes.add_type("image/webp"/".avif")` is needed because `python:3.12-slim` does not register them by default (see commit `406df0c`).
 
 #### Gallery (Tailnet-only)
 

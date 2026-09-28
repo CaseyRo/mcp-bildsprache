@@ -25,6 +25,11 @@ from PIL import Image
 from mcp_bildsprache.types import ProviderResult
 
 
+def _d(result):
+    """Tools return pydantic models; compare against the wire shape."""
+    return result.model_dump(by_alias=True, exclude_none=True)
+
+
 def _fake_provider_result(model: str = "gpt-image-2") -> ProviderResult:
     buf = io.BytesIO()
     Image.new("RGB", (1024, 1024), color=(80, 120, 160)).save(buf, format="PNG")
@@ -98,12 +103,12 @@ class TestGenerateImageCostConfirmation:
         """ctx=None (direct call) must generate exactly as before."""
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="x", dimensions="512x512")
+            result = _d(await generate_image(prompt="x", dimensions="512x512"))
 
         assert result.get("cancelled") is not True
         assert "hosted_url" in result
@@ -115,12 +120,12 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(RuntimeError("elicitation not supported"))
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="x", dimensions="512x512", ctx=ctx)
+            result = _d(await generate_image(prompt="x", dimensions="512x512", ctx=ctx))
 
         assert ctx.elicit_called is True
         assert result.get("cancelled") is not True
@@ -132,12 +137,12 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_accept(True))
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="x", dimensions="512x512", ctx=ctx)
+            result = _d(await generate_image(prompt="x", dimensions="512x512", ctx=ctx))
 
         assert "hosted_url" in result
         assert result.get("cancelled") is not True
@@ -148,12 +153,12 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_decline())
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="x", dimensions="512x512", ctx=ctx)
+            result = _d(await generate_image(prompt="x", dimensions="512x512", ctx=ctx))
 
         assert result["cancelled"] is True
         assert "hosted_url" not in result
@@ -167,12 +172,12 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_cancel())
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="x", dimensions="512x512", ctx=ctx)
+            result = _d(await generate_image(prompt="x", dimensions="512x512", ctx=ctx))
 
         assert result["cancelled"] is True
         mock_provider.assert_not_awaited()
@@ -183,12 +188,12 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_accept(False))
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_image(prompt="x", dimensions="512x512", ctx=ctx)
+            result = _d(await generate_image(prompt="x", dimensions="512x512", ctx=ctx))
 
         assert result["cancelled"] is True
         mock_provider.assert_not_awaited()
@@ -209,12 +214,12 @@ async def test_hanging_elicit_is_bounded_and_dispatches(tmp_path: Path, mock_pro
 
     ctx = _HangingCtx(None)
     t0 = time.monotonic()
-    with patch("mcp_bildsprache.server.settings"), \
+    with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
          patch("mcp_bildsprache.storage.settings") as ss:
         ss.image_storage_path = str(tmp_path)
         ss.image_domain = "https://img.cdit-works.de"
 
-        result = await generate_image(prompt="x", dimensions="512x512", ctx=ctx)
+        result = _d(await generate_image(prompt="x", dimensions="512x512", ctx=ctx))
 
     assert time.monotonic() - t0 < 7
     assert ctx.response_type is bool
@@ -234,12 +239,12 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(RuntimeError("elicitation not supported"))
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="flow", prompt="a -> b", ctx=ctx)
+            result = _d(await generate_diagram(format="flow", prompt="a -> b", ctx=ctx))
 
         assert ctx.elicit_called is True
         assert result.get("cancelled") is not True
@@ -251,12 +256,12 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_decline())
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="flow", prompt="a -> b", ctx=ctx)
+            result = _d(await generate_diagram(format="flow", prompt="a -> b", ctx=ctx))
 
         assert result["cancelled"] is True
         assert "hosted_url" not in result
@@ -270,12 +275,12 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_cancel())
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="flow", prompt="a -> b", ctx=ctx)
+            result = _d(await generate_diagram(format="flow", prompt="a -> b", ctx=ctx))
 
         assert result["cancelled"] is True
         mock_provider.assert_not_awaited()
@@ -285,12 +290,12 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_accept(True))
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
-            result = await generate_diagram(format="flow", prompt="a -> b", ctx=ctx)
+            result = _d(await generate_diagram(format="flow", prompt="a -> b", ctx=ctx))
 
         assert "hosted_url" in result
         assert result.get("cancelled") is not True
@@ -302,7 +307,7 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_decline())
-        result = await generate_diagram(format="flow", ctx=ctx)  # no prompt/mermaid
+        result = _d(await generate_diagram(format="flow", ctx=ctx))  # no prompt/mermaid
 
         assert result["error"]["code"] == "INVALID_INPUT"
         assert ctx.elicit_called is False
