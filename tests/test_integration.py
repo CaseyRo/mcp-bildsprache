@@ -461,7 +461,6 @@ class TestOtherTools:
             s.openai_api_key = SecretStr("fake-key")
             s.gemini_api_key = SecretStr("fake-key")
             s.openai_image_model = "gpt-image-2"
-            s.openai_image_model_draft = "gpt-image-1-mini"
 
             result = await list_models()
 
@@ -482,12 +481,10 @@ class TestOtherTools:
         assert result["diagram_capable"] == ["openai", "gemini"]
         assert set(result["diagram_formats"]) == {"flow", "sequence", "state"}
 
-        # Model lineup refresh (CDI-1264): the openai provider advertises
-        # gpt-image-1.5 (high) alongside gpt-image-2; gemini advertises Nano
-        # Banana Pro + Nano Banana 2 and NO longer gemini-2.5-flash-image.
+        # openai advertises only the model the provider actually pins; gemini
+        # advertises Nano Banana Pro + Nano Banana 2, NOT gemini-2.5-flash-image.
         by_id = {m["id"]: m for m in providers}
-        assert "gpt-image-1.5" in by_id["openai"]["models"]
-        assert "gpt-image-2" in by_id["openai"]["models"]
+        assert by_id["openai"]["models"] == ["gpt-image-2"]
         assert "gemini-3-pro-image-preview" in by_id["gemini"]["models"]
         assert "gemini-3.1-flash-image-preview" in by_id["gemini"]["models"]
         assert "gemini-2.5-flash-image" not in by_id["gemini"]["models"]
@@ -1169,14 +1166,17 @@ class TestGenerationLedgerWiring:
              patch("mcp_bildsprache.server.settings") as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
+            s.openai_image_model = "gpt-image-2"
             s.image_storage_path = str(tmp_path)
             s.image_domain = "https://img.cdit-works.de"
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
             with pytest.raises(RuntimeError, match="OpenAI 500 boom"):
+                # A retired hint must be recorded as the model that ran.
                 await generate_image(
-                    prompt="ledger failure", context="casey", dimensions="512x512"
+                    prompt="ledger failure", context="casey", dimensions="512x512",
+                    model="gpt-image-1.5",
                 )
 
         recs = ledmod.read_records(path=ledger_file)
@@ -1186,6 +1186,7 @@ class TestGenerationLedgerWiring:
         assert rec["error_category"] == "RuntimeError"
         assert "OpenAI 500 boom" in rec["error_message"]
         assert rec["brand"] == "casey"
+        assert rec["model"] == "gpt-image-2"
         assert "latency_ms" in rec
 
     @pytest.mark.anyio

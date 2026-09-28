@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     # OpenAI image-generation model IDs (config so we can pin a snapshot like
     # gpt-image-2-2026-04-21 without a code change).
     openai_image_model: str = "gpt-image-2"
-    openai_image_model_draft: str = "gpt-image-1-mini"
 
     # Image hosting
     enable_hosting: bool = True

@@ -56,7 +56,7 @@ _MIN_PIXELS = 655_360
 _MAX_PIXELS = 8_294_400
 
 # Known-good quality presets. We default to medium and only promote to high
-# on explicit caller opt-in. Low is exposed via a draft=true flag upstream.
+# on explicit caller opt-in.
 _QUALITIES = ("low", "medium", "high", "auto")
 
 
@@ -188,7 +188,6 @@ async def generate_openai(
     output_compression: int = 90,
     background: str = "opaque",
     moderation: str = "auto",
-    draft: bool = False,
     stream: bool = False,
     **kwargs: Any,
 ) -> ProviderResult:
@@ -207,7 +206,6 @@ async def generate_openai(
         background: "opaque" | "auto". "transparent" is NOT supported on
             gpt-image-2 and is rejected explicitly.
         moderation: "auto" | "low". Default "auto".
-        draft: If True, routes to the cheap tier (gpt-image-1-mini).
         stream: Not supported in v1 — rejected with a clear error.
 
     Returns:
@@ -244,7 +242,7 @@ async def generate_openai(
 
     # ponytail: pinned to gpt-image-2 only. The draft tier (gpt-image-1-mini) and
     # the gpt-image-1.5 hint both returned provider_errors overnight (0/6, 0/3),
-    # while gpt-image-2 was 100% (17/17). Ignore `draft` and any `model` hint.
+    # while gpt-image-2 was 100% (17/17). Ignore any `model` hint.
     # Tune via OPENAI_IMAGE_MODEL if a variant ever becomes reliable again.
     kwargs.pop("model", None)
     model = settings.openai_image_model

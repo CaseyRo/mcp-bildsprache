@@ -1,7 +1,7 @@
 """Tests for providers/openai.py — CDI-1014 §4.
 
 Covers: size validation/snapping, param guards (input_fidelity strip,
-transparent rejection, streaming rejection), draft routing, usage +
+transparent rejection, streaming rejection), model pinning, usage +
 revised_prompt capture, 429 backoff, missing API key.
 """
 
@@ -125,17 +125,6 @@ class TestDispatchAndCapture:
         assert request is not None
         payload = _json.loads(request.read())
         assert payload["model"] == "gpt-image-2"
-        assert r.model == "gpt-image-2"
-
-    async def test_draft_is_pinned_to_gpt_image_2(self, httpx_mock: HTTPXMock) -> None:
-        import json as _json
-
-        # draft is now a no-op — everything pins to gpt-image-2 (mini errored 0/6 overnight).
-        httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
-        r = await generate_openai("prompt", draft=True)
-        request = httpx_mock.get_request()
-        assert request is not None
-        assert _json.loads(request.read())["model"] == "gpt-image-2"
         assert r.model == "gpt-image-2"
 
     async def test_model_hint_is_ignored(self, httpx_mock: HTTPXMock) -> None:
