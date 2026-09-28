@@ -1,6 +1,6 @@
 # mcp-bildsprache
 
-MCP server for brand-aware image generation. Active providers: OpenAI (gpt-image-2 + gpt-image-1.5) for raster, Google Gemini (Nano Banana Pro / Nano Banana 2) for diagrams and the raster fallback. FLUX.2 and Recraft V4.1 remain in-tree but disabled at the dispatcher (re-enabling is a one-PR swap).
+MCP server for brand-aware image generation. Active providers: OpenAI (gpt-image-2) for raster, Google Gemini (Nano Banana Pro / Nano Banana 2) for diagrams and the raster fallback. FLUX.2 and Recraft V4.1 remain in-tree but disabled at the dispatcher (re-enabling is a one-PR swap).
 
 ## Quick Start
 
@@ -16,8 +16,8 @@ docker compose up --build
 ## MCP Tools
 
 - `generate_image` — Full image generation with brand preset injection.
-  Default raster path: OpenAI gpt-image-2; `model_hint='gpt-image-1.5'` selects the
-  quality sibling GPT Image 1.5 (high) using the same image params (size/quality tiers).
+  Default raster path: OpenAI gpt-image-2 at medium quality (the only OpenAI model it renders
+  with; the retired `gpt-image-1.5` / `gpt-image-1-mini` hints are accepted and ignored).
   Optional `register: 'personal' | 'professional'` for the casey brand (May 2026 brand
   collapse). Optional `reference_images: list[bytes]` forwards reference images to OpenAI
   (or auto-resolves from the brand's identity pack when `context` is set). Optional
@@ -28,7 +28,7 @@ docker compose up --build
   past the ~60s Cloudflare-portal timeout) returns `{job_id, status: "pending", poll_with:
   "get_image_result"}` immediately while the render keeps running server-side. The render
   is detached from the request scope so it survives the portal teardown. Inline-wait budget
-  is `SYNC_WAIT_SECONDS` (default 40s, under the portal limit); pass `background=true` (or
+  is `SYNC_WAIT_SECONDS` (default 20s, under the portal limit); pass `background=true` (or
   set `SYNC_WAIT_SECONDS=0`) to always get the job handle. Poll with `get_image_result`.
 - `generate_diagram` — Flow / sequence / state diagrams via Gemini Nano Banana Pro
   (`gemini-3-pro-image-preview`, default — top editing/control + 4K brand graphics) or
@@ -47,7 +47,7 @@ docker compose up --build
   provider call, no cost. **Requires a Cloudflare-portal catalog refresh before it is
   callable through the portal** (see "Portal refresh" below).
 - `generate_prompt` — Prompt engineering only (no image generation).
-- `list_models` — Active providers (`openai`: gpt-image-2 + gpt-image-1.5 + draft;
+- `list_models` — Active providers (`openai`: gpt-image-2;
   `gemini`: Nano Banana Pro + Nano Banana 2) plus a `disabled_providers` array
   (`bfl`, `recraft` — modules in-tree but disabled at the dispatcher per the May 2026
   brand collapse). Also reports `identity_packs: {brand: bool}` and

@@ -60,3 +60,34 @@ async def test_a_tool_call_writes_one_usage_line(capsys):
     lines = [ln for ln in capsys.readouterr().err.splitlines() if '"mcp_usage"' in ln]
     assert len(lines) == 1
     assert all(s in lines[0] for s in ('"bildsprache"', '"get_visual_presets"', '"outcome": "ok"'))
+
+
+@pytest.mark.asyncio
+async def test_generate_image_surface_drops_dead_hints():
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    props = tools["generate_image"].inputSchema["properties"]
+    assert "draft" not in props
+    enum = props["model"]["anyOf"][0]["enum"]
+    assert "gpt-image-2" in enum
+    assert not {"gpt-image-1.5", "gpt-image-1-mini"} & set(enum)
+
+
+@pytest.mark.asyncio
+async def test_stale_portal_args_are_ignored_not_rejected():
+    # A stale portal catalog may still send draft / a retired model hint. They
+    # must get past validation; bad dimensions then stop the call before any
+    # provider (patched anyway) is reached.
+    from unittest.mock import AsyncMock, patch
+
+    boom = AsyncMock(side_effect=AssertionError("provider must not be called"))
+    with patch("mcp_bildsprache.server.PROVIDERS", {"openai": boom, "gemini": boom}):
+        async with Client(mcp) as client:
+            result = await client.call_tool(
+                "generate_image",
+                {"prompt": "x", "dimensions": "bad", "draft": True, "model": "gpt-image-1.5"},
+                raise_on_error=False,
+            )
+    assert result.is_error
+    assert "Invalid dimensions" in result.content[0].text
+    boom.assert_not_called()

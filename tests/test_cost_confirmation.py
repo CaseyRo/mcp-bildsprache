@@ -14,9 +14,11 @@ the paid provider call. Per the defensive-elicit contract:
 from __future__ import annotations
 
 import io
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import anyio
 import pytest
 from PIL import Image
 
@@ -190,6 +192,35 @@ class TestGenerateImageCostConfirmation:
 
         assert result["cancelled"] is True
         mock_provider.assert_not_awaited()
+
+
+class _HangingCtx(_FakeCtx):
+    """The Cloudflare portal: elicit is sent but no answer ever comes back."""
+
+    async def elicit(self, message, response_type=None):
+        self.elicit_called = True
+        self.response_type = response_type
+        await anyio.sleep_forever()
+
+
+@pytest.mark.anyio
+async def test_hanging_elicit_is_bounded_and_dispatches(tmp_path: Path, mock_provider):
+    from mcp_bildsprache.server import generate_image
+
+    ctx = _HangingCtx(None)
+    t0 = time.monotonic()
+    with patch("mcp_bildsprache.server.settings"), \
+         patch("mcp_bildsprache.storage.settings") as ss:
+        ss.image_storage_path = str(tmp_path)
+        ss.image_domain = "https://img.cdit-works.de"
+
+        result = await generate_image(prompt="x", dimensions="512x512", ctx=ctx)
+
+    assert time.monotonic() - t0 < 7
+    assert ctx.response_type is bool
+    assert result.get("cancelled") is not True
+    assert "hosted_url" in result
+    mock_provider.assert_awaited()
 
 
 # ---------------------------------------------------------------------------

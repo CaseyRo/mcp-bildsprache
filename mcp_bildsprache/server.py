@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Literal
+from typing import Annotated, Any, Callable, Literal
 
+import anyio
 from fastmcp import Context, FastMCP
+from fastmcp.server.middleware import Middleware
+from pydantic import BeforeValidator
 from mcp.types import Icon
 
 from pathlib import Path
@@ -66,9 +69,24 @@ from mcp_bildsprache.types import (
 
 logger = logging.getLogger(__name__)
 
-Model = Literal[
+_ELICIT_TIMEOUT_S = 5
+
+# Hints the stale Cloudflare portal catalog may still send. The OpenAI provider
+# pins gpt-image-2 and ignored them anyway; accept and drop them so an old
+# catalog never turns into a validation error.
+_RETIRED_MODEL_HINTS = frozenset({"gpt-image-1.5", "gpt-image-1-mini"})
+
+
+def _drop_retired_hint(v: Any) -> Any:
+    if v in _RETIRED_MODEL_HINTS:
+        logger.warning("model hint %r is retired; rendering with gpt-image-2", v)
+        return "gpt-image-2"
+    return v
+
+
+_ModelLiteral = Literal[
     # Active providers (May 2026 brand collapse).
-    "gemini", "openai", "gpt-image-2", "gpt-image-1.5", "gpt-image-1-mini",
+    "gemini", "openai", "gpt-image-2",
     # Disabled but accepted at the API boundary so the dispatcher can
     # raise ProviderTemporarilyDisabled with a clear migration message.
     # Removing them from the Literal would surface as a cryptic Pydantic
@@ -78,6 +96,7 @@ Model = Literal[
     "flux", "flux-2-max", "flux-2-pro", "flux-pro-1.1",
     "recraft",
 ]
+Model = Annotated[_ModelLiteral, BeforeValidator(_drop_retired_hint)]
 Register = Literal["personal", "professional"]
 BrandContext = Literal[
     # Active brands (May 2026 brand collapse).
@@ -290,7 +309,8 @@ async def _confirm_cost(
 
     Defensive-elicit contract (rule 4): elicitation is an *optional* client
     capability. fastmcp raises when the client/portal has no elicitation
-    handler, so any failure here — unsupported, transport error, timeout — is
+    handler, so any failure here — unsupported, transport error, or no answer
+    within ``_ELICIT_TIMEOUT_S`` — is
     treated as "proceed" so paid generation NEVER breaks for clients that
     can't prompt. The ``destructiveHint`` annotation already warns those
     clients that cost is incurred. Only an explicit decline/cancel from a
@@ -308,10 +328,13 @@ async def _confirm_cost(
         f"incur approximately {cost_str}. Proceed?"
     )
     try:
-        result = await ctx.elicit(message, response_type=bool)
+        # Bounded: the Cloudflare portal forwards no server->client requests, so
+        # an unbounded elicit there never resolves and the call dies at -32001.
+        with anyio.fail_after(_ELICIT_TIMEOUT_S):
+            result = await ctx.elicit(message, response_type=bool)
     except Exception:
-        # Client doesn't support elicitation (or it errored). Proceed — the
-        # destructiveHint annotation already surfaced the cost warning.
+        # Client doesn't support elicitation, errored, or never answered.
+        # Proceed — the destructiveHint annotation already surfaced the cost.
         logger.debug("cost-confirmation elicitation unavailable; proceeding", exc_info=True)
         return True
 
@@ -351,6 +374,23 @@ def _render_clock() -> Callable[[], int]:
     return lambda: int((time.monotonic() - t0) * 1000)
 
 
+def _model_used(provider: str, hint: str | None) -> str | None:
+    """The model that will actually render, for the cost estimate and ledger.
+
+    OpenAI ignores model hints and pins ``settings.openai_image_model``
+    (providers/openai.py), so record that rather than the hint.
+    """
+    if provider == "openai":
+        return settings.openai_image_model
+    return hint if hint and hint != provider else None
+
+
+def _with_sync_wait_doc(fn):
+    # The inline budget the docstring promises must be the configured one.
+    fn.__doc__ = fn.__doc__.replace("{sync_wait}", str(settings.sync_wait_seconds))
+    return fn
+
+
 async def _render_image_job(
     *,
     job_id: str,
@@ -362,7 +402,6 @@ async def _render_image_job(
     h: int,
     has_refs: bool,
     refs_bytes: list[bytes],
-    draft: bool,
     raw: bool,
     context: str | None,
     platform: str | None,
@@ -387,7 +426,6 @@ async def _render_image_job(
         if has_refs:
             kwargs["reference_images"] = refs_bytes
         if provider_key == "openai":
-            kwargs["draft"] = draft
             if model_id and model_id.startswith("gpt-image"):
                 kwargs["model"] = model_id
             return await provider_fn(enhanced_prompt, w, h, **kwargs)
@@ -510,14 +548,13 @@ async def _render_image_job(
     logger.info(
         "event=image_generated "
         "provider=%s model=%s brand_context=%s amount_eur=%.6f "
-        "tier=%s schema_version=%s draft=%s fallback=%s",
+        "tier=%s schema_version=%s fallback=%s",
         attribution.get("provider"),
         provider_result.model,
         context or "none",
         float(cost_block.get("amount_eur") or 0.0),
         cost_block.get("tier", "standard"),
         attribution.get("schema_version"),
-        draft,
         fallback_used,
     )
 
@@ -885,9 +922,8 @@ Choosing a tool:
 - `generate_image` — the full raster pipeline. One call resolves identity +
   brand preset + provider routing + sizing + storage + cost attribution.
   Use for social/blog/OG/proposal imagery. Default provider: OpenAI
-  gpt-image-2; `model_hint='gpt-image-1.5'` picks the GPT Image 1.5 (high)
-  quality sibling (same image params). WRITES an artifact and incurs
-  paid-API cost.
+  gpt-image-2 (the only OpenAI model it renders with). WRITES an artifact
+  and incurs paid-API cost.
 - `generate_diagram` — flow / sequence / state diagrams from free-text or a
   Mermaid source (flowchart/graph, sequenceDiagram, stateDiagram only).
   Default provider: Gemini Nano Banana Pro (`gemini-3-pro-image-preview` —
@@ -933,6 +969,24 @@ mcp = FastMCP(
     ],
 )
 mcp.add_middleware(UsageMiddleware("bildsprache"))
+
+
+class _DropRetiredArgs(Middleware):
+    """Drop `generate_image(draft=...)`, which the provider ignored anyway.
+
+    The Cloudflare portal catalog doesn't auto-refresh, so it may keep sending
+    the removed arg; without this the call fails with unexpected_keyword_argument.
+    """
+
+    async def on_call_tool(self, context, call_next):
+        msg = context.message
+        if msg.name == "generate_image" and msg.arguments and "draft" in msg.arguments:
+            msg.arguments.pop("draft")
+            logger.warning("generate_image: retired arg 'draft' ignored")
+        return await call_next(context)
+
+
+mcp.add_middleware(_DropRetiredArgs())
 
 
 # --- Health endpoint -----------------------------------------------------
@@ -987,6 +1041,7 @@ async def _health_check_z(request: _SReq) -> _SResp:
         "openWorldHint": True,
     }
 )
+@_with_sync_wait_doc
 async def generate_image(
     prompt: str,
     context: BrandContext | None = None,
@@ -998,7 +1053,6 @@ async def generate_image(
     raw: bool = False,
     reference_images: list[bytes] | None = None,
     include_dogs: bool | None = None,
-    draft: bool = False,
     background: bool = False,
     ctx: Context | None = None,
 ) -> GenerateImageResult:
@@ -1007,7 +1061,7 @@ async def generate_image(
     Response shape is a UNION (CDI-1266 async dispatch+poll):
 
     * **Result** (fast path) — when the render finishes within the safe inline
-      budget (``sync_wait_seconds``, default ~40s, comfortably under the ~60s
+      budget (``SYNC_WAIT_SECONDS``, currently {sync_wait}s, under the ~60s
       Cloudflare-portal timeout), you get the hosted image inline exactly as
       before: ``{hosted_url, model, cost_estimate, dimensions, ai_attribution,
       response_mode: "url", ...}``.
@@ -1039,9 +1093,8 @@ async def generate_image(
                   manifesto-adjacent) or ``professional`` (verification,
                   workshop voice). Defaults to ``professional`` for casey
                   when omitted.
-        model: Force a specific model. Active hints: ``openai``,
-                ``gpt-image-2``, ``gpt-image-1.5`` (the GPT Image 1.5 (high)
-                quality sibling — same image params), ``gpt-image-1-mini``,
+        model: Force a provider. Active hints: ``openai`` / ``gpt-image-2``
+                (the same thing: OpenAI always renders gpt-image-2) and
                 ``gemini``. Disabled hints (``flux``, ``recraft``, ``flux-*``)
                 raise PROVIDER_TEMPORARILY_DISABLED with a migration message.
         platform: Target platform (linkedin-post, blog-hero, etc.) for auto-sizing.
@@ -1055,8 +1108,6 @@ async def generate_image(
             None = use manifest rules (default), True = force-include dog
             slots (Sien, Fimme), False = suppress them. Ignored when no
             identity pack is loaded for the resolved context.
-        draft: If true, route OpenAI to ``gpt-image-1-mini`` (cheap tier).
-                Trades quality for cost.
         background: If true, return the ``{job_id, status: "pending"}`` handle
                 IMMEDIATELY without the inline wait (equivalent to
                 ``sync_wait_seconds=0``). Use when you'd rather poll than hold the
@@ -1112,7 +1163,7 @@ async def generate_image(
                 "message": e.message,
             },
         }
-    specific_model = model if model and model != selected_provider else None
+    specific_model = _model_used(selected_provider, model)
 
     # Determine dimensions
     if dimensions:
@@ -1204,7 +1255,6 @@ async def generate_image(
             h=h,
             has_refs=has_refs,
             refs_bytes=refs_bytes,
-            draft=draft,
             raw=raw,
             context=context,
             platform=platform,
@@ -1377,9 +1427,7 @@ async def generate_diagram(
             },
         }
 
-    specific_model = (
-        model_hint if model_hint and model_hint != selected_provider else None
-    )
+    specific_model = _model_used(selected_provider, model_hint)
 
     # Compose engineered prompt (palette + register + format conventions).
     enhanced_prompt = compose_render_brief(
@@ -1570,29 +1618,18 @@ async def list_models() -> ModelsResult:
     available = []
 
     if settings.openai_api_key.get_secret_value():
-        # gpt-image-1.5 (high) sits alongside gpt-image-2 as a quality sibling
-        # (model lineup refresh, CDI-1264) — same image params (size/quality
-        # tiers), selectable via model_hint="gpt-image-1.5".
-        openai_models = [
-            settings.openai_image_model,
-            "gpt-image-1.5",
-            settings.openai_image_model_draft,
-        ]
-        # De-dupe while preserving order (in case the configured model is one
-        # of the siblings already listed).
-        seen: set[str] = set()
-        openai_models = [m for m in openai_models if not (m in seen or seen.add(m))]
+        # The provider pins this one model at medium quality; hints are ignored.
         available.append({
             "id": "openai",
             "name": "OpenAI gpt-image",
-            "models": openai_models,
+            "models": [settings.openai_image_model],
             "default": settings.openai_image_model,
             "best_for": (
                 "Default raster path. Strong typography in-image, "
                 "sibling-series consistency, reference image support. "
-                "gpt-image-1.5 (high) is the quality sibling of gpt-image-2."
+                "Always renders at medium quality."
             ),
-            "cost": "$0.006–$0.211/image (quality-dependent)",
+            "cost": "usage-based, medium quality (real figure in ai_attribution)",
             "rate_limit": "Tier 1: 5 IPM / 100K TPM (sequential dispatch)",
             "status": "available",
         })
