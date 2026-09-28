@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # ca-certificates: httpx2 (fastmcp 4) uses the OS trust store.
 RUN apt-get update && \
