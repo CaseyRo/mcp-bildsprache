@@ -814,8 +814,8 @@ _load_identity_at_startup()
 def _build_auth():
     """Build auth provider if running in HTTP mode.
 
-    Reads MCP_API_KEY (fleet standard) with fallback to MCP_BILDSPRACHE_API_KEY
-    for backwards compatibility. In HTTP mode, a missing/empty key causes the
+    Reads MCP_BILDSPRACHE_API_KEY only (the stack's MCP_API_KEY is ignored).
+    In HTTP mode, a missing/empty key causes the
     server to refuse to start rather than silently run unauthenticated.
     """
     if settings.transport != "http":
@@ -934,7 +934,7 @@ from datetime import datetime, timezone as _tz  # noqa: E402
 from starlette.requests import Request as _SReq  # noqa: E402
 from starlette.responses import JSONResponse as _SResp  # noqa: E402
 
-from mcp_bildsprache import __version__ as _version  # noqa: E402
+from mcp_bildsprache import GIT_COMMIT, __version__ as _version  # noqa: E402
 
 _start_time = datetime.now(_tz.utc)
 
@@ -957,6 +957,7 @@ async def _health_check(request: _SReq) -> _SResp:
         "status": status,
         "service": "mcp-bildsprache",
         "version": _version,
+        "git_commit": GIT_COMMIT,
         "upstream_reachable": True,
         "uptime_seconds": int((datetime.now(_tz.utc) - _start_time).total_seconds()),
         "attribution": {
