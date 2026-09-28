@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -40,6 +41,34 @@ PERSON_EXCLUDING_MARKERS: tuple[str, ...] = (
 # `@casey.berlin` manifest shape. Declared here so the override remains
 # deterministic even if a future manifest uses different primary keys.
 DOG_SLOT_NAMES: tuple[str, ...] = ("fimme", "sien")
+
+# `include_people=None` heuristic. A negation wins over a person word ("No
+# people" contains "people"); neither → the manifest rules decide.
+# ponytail: substring/word lists, not NLP; extend the lists when a prompt misfires.
+NO_PEOPLE_MARKERS: tuple[str, ...] = (
+    "no people",
+    "no person",
+    "nobody",
+    "empty room",
+    "still life",
+    "without people",
+    "keine personen",
+    "ohne menschen",
+)
+_PERSON_WORDS = re.compile(
+    r"\b(casey|man|men|woman|person|people|portrait|selfie|he|him|his|himself)\b",
+    re.IGNORECASE,
+)
+
+
+def people_hint(prompt: str) -> tuple[bool | None, str]:
+    """(want person refs?, why) from the prompt text; None = no signal."""
+    lowered = prompt.lower()
+    if any(m in lowered for m in NO_PEOPLE_MARKERS):
+        return False, "prompt excludes people"
+    if _PERSON_WORDS.search(prompt):
+        return True, "prompt names a person"
+    return None, "manifest rules"
 
 
 class _SlotSchema(BaseModel):
@@ -247,46 +276,32 @@ def resolve_identity_for_call(
     pack: IdentityPack,
     prompt: str,
     include_dogs: bool | None = None,
+    include_people: bool | None = None,
 ) -> list[Path]:
-    """Wrapper around :func:`resolve_identity` that honours the
-    ``include_dogs`` override.
+    """Wrapper around :func:`resolve_identity` that honours the overrides.
 
-    - ``None`` → use the manifest heuristic (default).
-    - ``True`` → force-include the dog slots (``DOG_SLOT_NAMES``), even if
-      the prompt does not match include keywords. Person-excluding markers
-      still win (no dogs in an icon prompt).
-    - ``False`` → suppress the dog slots, even if the prompt matches
-      include keywords.
+    Dog slots (``DOG_SLOT_NAMES``) follow ``include_dogs``; every other slot
+    is a person slot and follows ``include_people``, which falls back to
+    :func:`people_hint` when None. Per override: ``None`` → manifest rules,
+    ``True`` → force the slots in, ``False`` → drop them. Person-excluding
+    markers ("icon", "logo", ...) still win: no refs at all.
     """
-    if include_dogs is None:
-        return resolve_identity(pack, prompt)
-
-    # Start from the heuristic result; we mutate it per the override.
     base = resolve_identity(pack, prompt)
-
-    # Short-circuit: if the prompt was person-excluding, stay empty.
+    if include_people is None:
+        include_people = people_hint(prompt)[0]
+    if include_dogs is None and include_people is None:
+        return base
     if not base and _prompt_has_person_excluding_marker(prompt):
         return []
 
-    dog_slots = [s for s in pack.slots if s.name in DOG_SLOT_NAMES and not s.unavailable]
-    dog_files_set: set[Path] = set()
-    for slot in dog_slots:
-        dog_files_set.update(slot.files)
-
-    if include_dogs is False:
-        return [p for p in base if p not in dog_files_set]
-
-    # include_dogs is True — ensure every available dog slot is present,
-    # in manifest declaration order. Re-walk the slot list so ordering is
-    # deterministic and matches the non-override behaviour.
-    result: list[Path] = []
     base_set = set(base)
+    result: list[Path] = []
     for slot in pack.slots:
         if slot.unavailable:
             continue
-        if slot.name in DOG_SLOT_NAMES:
-            result.extend(slot.files)
-        elif any(p in base_set for p in slot.files):
+        override = include_dogs if slot.name in DOG_SLOT_NAMES else include_people
+        keep = any(p in base_set for p in slot.files) if override is None else override
+        if keep:
             result.extend(slot.files)
     return result
 

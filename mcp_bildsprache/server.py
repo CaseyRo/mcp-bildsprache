@@ -23,10 +23,12 @@ from mcp_bildsprache.auth import (
 )
 from mcp_bildsprache.config import settings
 from mcp_bildsprache.identity import (
+    DOG_SLOT_NAMES,
     get_loaded_packs,
     get_pack_for_context,
     load_identity_packs,
     resolve_identity_for_call,
+    people_hint,
     set_loaded_packs,
 )
 from mcp_bildsprache.pipeline import process_image
@@ -315,22 +317,24 @@ def _model_used(provider: str, hint: str | None) -> str | None:
 
 
 def _pick_raster_model(
-    provider: str, hint: str | None, *, identity_scene: bool
+    provider: str, hint: str | None, *, identity_scene: bool, why: str = ""
 ) -> tuple[str | None, str]:
     """generate_image's model and a short why.
 
     Explicit model > OPENAI_IMAGE_MODEL > the default split (Casey, 2026-09-28
-    A/B): identity scenes (person/dog refs attached) get gpt-image-2, since
-    gpt-image-2.5-flare drew Casey twice in 1 of 3; everything else gets flare
-    at ~half the price.
+    A/B): identity scenes (PERSON refs attached) get gpt-image-2, since
+    gpt-image-2.5-flare drew Casey twice in 1 of 3; everything else, dog-only
+    refs included, gets flare at ~half the price. ``why`` names the path that
+    decided the person refs.
     """
+    why = f" ({why})" if why else ""
     if provider != "openai" or hint in OPENAI_MODELS:
         return _model_used(provider, hint), "explicit model"
     if settings.openai_image_model:
         return settings.openai_image_model, "OPENAI_IMAGE_MODEL set"
     if identity_scene:
-        return "gpt-image-2", "identity scene: gpt-image-2 keeps one Casey"
-    return "gpt-image-2.5-flare", "no identity refs: flare default (~half price)"
+        return "gpt-image-2", f"identity scene{why}: gpt-image-2 keeps one Casey"
+    return "gpt-image-2.5-flare", f"no person refs{why}: flare default (~half price)"
 
 
 def _with_sync_wait_doc(fn):
@@ -989,6 +993,7 @@ async def generate_image(
     raw: bool = False,
     reference_images: list[bytes] | None = None,
     include_dogs: bool | None = None,
+    include_people: bool | None = None,
     background: bool = False,
     quality: Quality | None = None,
     transparent: bool = False,
@@ -1017,9 +1022,10 @@ async def generate_image(
     ``hosted_url`` as a failure.
 
     Default model (no ``model``, no ``OPENAI_IMAGE_MODEL``): identity scenes
-    (identity-pack person/dog refs or caller ``reference_images``) render on
-    gpt-image-2; everything else on the cheaper gpt-image-2.5-flare. The result's
-    ``model_reason`` says which rule applied. Gemini Nano Banana is also active. FLUX and Recraft are
+    (identity-pack PERSON refs or caller ``reference_images``) render on
+    gpt-image-2; everything else, dog-only scenes included, on the cheaper
+    gpt-image-2.5-flare. The result's ``model_reason`` says which rule applied
+    and why the person refs were (not) attached. Gemini Nano Banana is also active. FLUX and Recraft are
     temporarily disabled at the dispatcher; hinting at them raises
     ``PROVIDER_TEMPORARILY_DISABLED``.
 
@@ -1049,6 +1055,12 @@ async def generate_image(
             None = use manifest rules (default), True = force-include dog
             slots (Sien, Fimme), False = suppress them. Ignored when no
             identity pack is loaded for the resolved context.
+        include_people: Override whether Casey's person refs attach for
+            ``casey``: True = force them (gpt-image-2), False = suppress them
+            (flare). None (default) reads the prompt: "no people", "nobody",
+            "still life", "empty room", "without people", "keine Personen",
+            "ohne Menschen" → no refs; a person word (Casey, man, person,
+            portrait, he/him/his, people) → refs; neither → manifest rules.
         background: If true, return the ``{job_id, status: "pending"}`` handle
                 IMMEDIATELY without the inline wait (equivalent to
                 ``sync_wait_seconds=0``). Use when you'd rather poll than hold the
@@ -1064,19 +1076,34 @@ async def generate_image(
     # ------------------------------------------------------------------
     pack: IdentityPack | None = get_pack_for_context(context)
     resolved_paths: list[Path] = []
+    resolved_slots: list[str] = []
     used_identity_pack = False
+    person_why = "no identity pack"
 
     if reference_images:
         # Caller-supplied refs bypass the resolver entirely (per spec).
         refs_bytes: list[bytes] = list(reference_images)
+        person_why = "caller reference_images"
     elif pack is not None:
-        resolved_paths = resolve_identity_for_call(pack, prompt, include_dogs=include_dogs)
+        resolved_paths = resolve_identity_for_call(
+            pack, prompt, include_dogs=include_dogs, include_people=include_people
+        )
         refs_bytes = [_read_reference_bytes(p) for p in resolved_paths]
         used_identity_pack = bool(refs_bytes)
+        resolved_slots = _resolved_slot_names(pack, resolved_paths)
+        person_why = (
+            f"include_people={include_people}"
+            if include_people is not None
+            else people_hint(prompt)[1]
+        )
     else:
         refs_bytes = []
 
     has_refs = bool(refs_bytes)
+    # Only PERSON refs make an identity scene; dogs alone don't draw a second Casey.
+    person_scene = bool(reference_images) or any(
+        n not in DOG_SLOT_NAMES for n in resolved_slots
+    )
 
     # Determine provider. Per the May 2026 brand collapse, FLUX/Recraft
     # hints raise ProviderTemporarilyDisabled; surface as a clean MCP
@@ -1099,7 +1126,7 @@ async def generate_image(
             },
         })
     specific_model, model_reason = _pick_raster_model(
-        selected_provider, model, identity_scene=has_refs
+        selected_provider, model, identity_scene=person_scene, why=person_why
     )
     if quality is not None or transparent:
         if selected_provider != "openai":
@@ -1131,10 +1158,10 @@ async def generate_image(
     if context:
         parts.append(get_preset(context, register=register, prompt=prompt))
         # Casey composition clause fires when an identity pack contributed
-        # to refs and the resolved canonical brand is 'casey' (covers all
+        # person refs and the resolved canonical brand is 'casey' (covers all
         # legacy aliases via normalize_brand).
         from mcp_bildsprache.brands import normalize_brand as _normalize_brand
-        if used_identity_pack and _normalize_brand(context) == "casey":
+        if person_scene and used_identity_pack and _normalize_brand(context) == "casey":
             parts.append(CASEY_COMPOSITION_CLAUSE)
     parts.append(prompt)
     if mood:
@@ -1170,11 +1197,6 @@ async def generate_image(
     # 50-80s). `job_id` IS the CDI-1264 ledger request_id, so a result that
     # falls out of the in-process registry (restart / other worker) is still
     # recoverable from the durable ledger by the same id.
-    resolved_slots = (
-        _resolved_slot_names(pack, resolved_paths)
-        if (used_identity_pack and pack is not None)
-        else []
-    )
     job_id = _ledger.new_request_id()
 
 

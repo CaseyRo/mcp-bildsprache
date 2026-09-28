@@ -24,7 +24,10 @@ docker compose up --build
   collapse). Optional `reference_images: list[bytes]` forwards reference images to OpenAI
   (or auto-resolves from the brand's identity pack when `context` is set). Optional
   `include_dogs: bool | None` overrides the dog-slot heuristic for casey (True =
-  force-include Sien + Fimme, False = suppress, None = use manifest rules).
+  force-include Sien + Fimme, False = suppress, None = use manifest rules). Optional
+  `include_people: bool | None` does the same for Casey's person refs; None reads the
+  prompt ("no people"/"still life"/"keine Personen" → none, a person word → refs, neither →
+  manifest rules). Only person refs route the default model to gpt-image-2; else flare.
   **Async dispatch+poll (CDI-1266):** the response is a UNION — a fast render returns the
   `hosted_url` inline as before; a slow render (gpt-image-2 / Nano-Banana-Pro take 50-80s,
   past the ~60s Cloudflare-portal timeout) returns `{job_id, status: "pending", poll_with:
