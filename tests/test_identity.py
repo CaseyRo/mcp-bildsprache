@@ -12,6 +12,7 @@ from PIL import Image
 from mcp_bildsprache.identity import (
     DOG_SLOT_NAMES,
     load_identity_packs,
+    people_hint,
     resolve_identity,
     resolve_identity_for_call,
 )
@@ -230,3 +231,53 @@ class TestResolveIdentityForCall:
 
     def test_dog_slot_names_constant(self):
         assert set(DOG_SLOT_NAMES) == {"fimme", "sien"}
+
+
+class TestIncludePeople:
+    STILL_LIFE = "A still life on a wooden workbench with tools and a lamp. No people."
+
+    def _names(self, pack, prompt, **kw):
+        return [p.name for p in resolve_identity_for_call(pack, prompt, **kw)]
+
+    def test_still_life_drops_person_refs(self, tmp_path: Path):
+        pack = _make_pack(tmp_path)
+        assert self._names(pack, self.STILL_LIFE) == []
+
+    def test_negations_drop_person_refs(self, tmp_path: Path):
+        pack = _make_pack(tmp_path)
+        for prompt in (
+            "an empty room at dusk",
+            "a desk without people",
+            "Nobody on the street",
+            "Werkbank, keine Personen",
+            "Ein Flur ohne Menschen",
+        ):
+            assert self._names(pack, prompt) == [], prompt
+
+    def test_negation_keeps_dogs(self, tmp_path: Path):
+        pack = _make_pack(tmp_path)
+        assert self._names(pack, "morning walk in the forest, no people") == [
+            "fimme-1.webp", "sien-1.webp"
+        ]
+
+    def test_person_words_attach_refs(self, tmp_path: Path):
+        pack = _make_pack(tmp_path)
+        for prompt in ("portrait of Casey", "a man at his desk", "he reads by the window"):
+            assert self._names(pack, prompt) == ["casey-1.webp"], prompt
+
+    def test_person_word_needs_word_boundary(self):
+        assert people_hint("the manifest on a shelf")[0] is None
+        assert people_hint("a theme of hierarchy")[0] is None
+
+    def test_no_signal_keeps_manifest_rules(self, tmp_path: Path):
+        pack = _make_pack(tmp_path)
+        assert self._names(pack, "late afternoon coffee") == ["casey-1.webp"]
+
+    def test_flags_override_heuristic(self, tmp_path: Path):
+        pack = _make_pack(tmp_path)
+        assert self._names(pack, self.STILL_LIFE, include_people=True) == ["casey-1.webp"]
+        assert self._names(pack, "portrait of Casey", include_people=False) == []
+
+    def test_true_does_not_override_person_excluding_marker(self, tmp_path: Path):
+        pack = _make_pack(tmp_path)
+        assert self._names(pack, "a flat icon of Casey", include_people=True) == []

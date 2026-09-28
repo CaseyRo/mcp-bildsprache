@@ -468,6 +468,37 @@ class TestDefaultModelSplit:
         )
         assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-flare"
 
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("prompt", "flags", "model", "reason"),
+        [
+            ("A still life on a wooden workbench. No people.", {}, "gpt-image-2.5-flare",
+             "no person refs (prompt excludes people)"),
+            ("morning walk in the forest, no people", {}, "gpt-image-2.5-flare",
+             "no person refs (prompt excludes people)"),
+            ("portrait of Casey at his desk", {}, "gpt-image-2",
+             "identity scene (prompt names a person)"),
+            ("portrait of Casey", {"include_people": False}, "gpt-image-2.5-flare",
+             "no person refs (include_people=False)"),
+            ("A still life. No people.", {"include_people": True}, "gpt-image-2",
+             "identity scene (include_people=True)"),
+        ],
+    )
+    async def test_person_refs_decide_model(
+        self, tmp_path, mock_provider, monkeypatch, prompt, flags, model, reason
+    ):
+        from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
+
+        set_loaded_packs(load_identity_packs(TestIdentityIntegration._write_identity_pack(tmp_path)))
+        try:
+            result, _ = await self._run(
+                tmp_path, monkeypatch, prompt=prompt, context="casey", **flags
+            )
+        finally:
+            set_loaded_packs({})
+        assert mock_provider.await_args.kwargs["model"] == model
+        assert result["model_reason"].startswith(reason)
+
     def test_openai_image_model_env_forces(self):
         from mcp_bildsprache.server import _pick_raster_model
 

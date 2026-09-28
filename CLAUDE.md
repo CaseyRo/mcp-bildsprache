@@ -78,7 +78,7 @@ Implication: **do not hand-bump the version** in `pyproject.toml` — CI owns it
 tool call
   → get_pack_for_context(context)               [identity.py]   # loaded at startup
   → resolve_identity_for_call(pack, prompt,
-      include_dogs)                             [identity.py]   # [] if person-excluding
+      include_dogs, include_people)             [identity.py]   # [] if person-excluding
   → read reference bytes (cached per process)   [server.py]
   → route_model(context, platform, model_hint,
       has_references=bool(refs))                [presets.py]    # picks "flux"|"gemini"|"recraft"
@@ -136,7 +136,7 @@ Brand presets handle *visual DNA* (palette, mood, composition). Identity packs h
 Identity packs live on the `identity-data` Docker volume, mounted **read-only** at `/data/identity/<brand-dir>/`. Each brand has its own `manifest.json` plus reference images. Nothing identity-related is committed to this repo — see `docs/identity/README.md` for the volume contract and `docs/identity/manifest.example.json` for the schema.
 
 - **Loader**: `mcp_bildsprache/identity.py::load_identity_packs` runs at server startup, caches packs in a module-level dict. Missing/malformed manifests → WARN once, server keeps running with text-only prompts.
-- **Resolver**: `resolve_identity_for_call(pack, prompt, include_dogs)` returns a deterministic list of reference-image paths (manifest declaration order). Person-excluding markers (`"icon"`, `"flat illustration"`, `"abstract pattern"`, `"logo"`, `"architectural detail"`, `"svg"`) short-circuit to `[]`.
+- **Resolver**: `resolve_identity_for_call(pack, prompt, include_dogs, include_people)` returns a deterministic list of reference-image paths (manifest declaration order). Person-excluding markers (`"icon"`, `"flat illustration"`, `"abstract pattern"`, `"logo"`, `"architectural detail"`, `"svg"`) short-circuit to `[]`. `include_people=None` falls back to `people_hint(prompt)` (negation like "no people"/"still life" → drop person slots; person word → force them; neither → manifest). Only person refs make an "identity scene" (gpt-image-2); dog-only refs go to flare.
 - **Composition clause**: `presets.py::CASEY_COMPOSITION_CLAUSE` is prepended to the enhanced prompt *only* when the identity pack resolves to a non-empty list and the resolved canonical brand is `casey` (covers all legacy aliases). The gating lives in `server.py` so person-excluding prompts stay clean.
 - **`list_models`** returns `identity_packs: {brand: bool}`; `get_visual_presets(context=...)` returns `identity_pack_loaded: bool`.
 - **Volume rename in flight**: production may be on `/data/identity/casey-berlin/` (pre-rename) or `/data/identity/casey/` (post-rename). The loader handles both and `get_pack_for_context` tries multiple candidate keys (`casey`, `@casey`, `casey-berlin`, `@casey-berlin`, `@casey.berlin`) so deploy ordering can't break the lookup.
