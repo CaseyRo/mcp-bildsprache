@@ -1129,7 +1129,7 @@ async def generate_image(
     # an identity pack resolved to a non-empty list for the casey brand).
     parts = []
     if context:
-        parts.append(get_preset(context, register=register))
+        parts.append(get_preset(context, register=register, prompt=prompt))
         # Casey composition clause fires when an identity pack contributed
         # to refs and the resolved canonical brand is 'casey' (covers all
         # legacy aliases via normalize_brand).
@@ -1490,7 +1490,7 @@ async def generate_prompt(
 
     parts = []
     if context:
-        parts.append(get_preset(context, register=register))
+        parts.append(get_preset(context, register=register, prompt=prompt))
     parts.append(prompt)
     if mood:
         parts.append(f"Mood/emotional register: {mood}")
