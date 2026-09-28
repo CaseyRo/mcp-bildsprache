@@ -4,18 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-FastMCP server that exposes brand-aware image generation as MCP tools. The active dispatched providers are OpenAI (raster default at medium quality: gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise, via `server.py::_pick_raster_model`; `OPENAI_IMAGE_MODEL` forces one; `model` can pick `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` per call, with `quality` and `transparent` options) and Google Gemini (Nano Banana Pro `gemini-3-pro-image-preview` for diagrams + Nano Banana 2 `gemini-3.1-flash-image-preview` raster fallback). Black Forest Labs FLUX and Recraft V4.1 remain in-tree but disabled at the dispatcher. It injects a brand visual preset, generates via the provider API, then runs a post-processing pipeline (resize/crop → WebP → EXIF provenance) and stores the result on disk to be served under `https://img.cdit-works.de`.
+FastMCP 4 server that exposes brand-aware image generation as MCP tools. The active dispatched providers are OpenAI (raster default at medium quality: gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise, via `server.py::_pick_raster_model`; `OPENAI_IMAGE_MODEL` forces one; `model` can pick `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` per call, with `quality` and `transparent` options) and Google Gemini (Nano Banana Pro `gemini-3-pro-image-preview` for diagrams + Nano Banana 2 `gemini-3.1-flash-image-preview`, raster by explicit hint only). There is no automatic cross-provider fallback: a provider error fails the job. The FLUX and Recraft modules and the `FALLBACKS` map were deleted on 2026-06-30; FLUX/Recraft hints are still rejected with `ProviderTemporarilyDisabled` so the tool schema did not change. It injects a brand visual preset, generates via the provider API, then runs a post-processing pipeline (resize/crop → WebP → EXIF provenance) and stores the result on disk to be served under `https://img.cdit-works.de`.
 
 ### MCP tool surface
 
 `server.py` exposes these tools: `generate_image` (the full raster pipeline described below), `generate_diagram` (Mermaid-aware flow/sequence/state diagrams via Gemini Nano Banana Pro by default), `get_image_result` (CDI-1266 — poll for an async-dispatched render's result by `job_id`), `generate_prompt` (prompt engineering only, no provider call), `list_models` (capabilities/costs per provider — splits active vs. disabled), `get_visual_presets` (returns the `PRESETS` dict + `CASEY_REGISTER_OVERLAYS`, optionally filtered by `context` and `register`), `list_recent_generations` (newest-first artifact index — recovery path), and `generation_stats` (per-model outcome stats from the CDI-1264 ledger). When adding tools, keep the heavy lifting in helper modules — tool bodies should stay thin orchestrators.
 
-**Async dispatch+poll (CDI-1266):** `generate_image` / `generate_diagram` reach clients through a Cloudflare-managed MCP portal with a hard ~60s upstream read timeout. gpt-image-2 / Nano-Banana-Pro renders take 50-80s, so a synchronous response is severed (`-32001`) even though the render completes server-side. Fix: the render is dispatched on a DETACHED background task (`jobs.spawn_detached` — a module-level strong-ref task set on the running loop, NOT bound to the request's cancellation scope, so it survives request teardown) and the tool inline-waits only up to `SYNC_WAIT_SECONDS` (default 20s, under the portal limit). Fast renders return the `hosted_url` inline (backward compatible); slow ones return `{job_id, status: "pending", poll_with: "get_image_result"}`. `job_id` IS the CDI-1264 ledger `request_id`, so `get_image_result` resolves from the in-process registry first and falls back to the durable ledger by that id (recoverable across restarts/workers). The detached render owns its own ledger write (success AND failure) — the CDI-1264 ledger still fires on the async path. **`get_image_result` is a new tool → needs a Cloudflare-portal catalog refresh before it's callable through the portal.**
+**Async dispatch+poll (CDI-1266):** `generate_image` / `generate_diagram` reach clients through a Cloudflare-managed MCP portal with a hard ~60s upstream read timeout. gpt-image-2 / Nano-Banana-Pro renders take 50-80s, so a synchronous response is severed (`-32001`) even though the render completes server-side. Fix: the render is dispatched on a DETACHED background task (`jobs.spawn_detached` — a module-level strong-ref task set on the running loop, NOT bound to the request's cancellation scope, so it survives request teardown) and the tool inline-waits only up to `SYNC_WAIT_SECONDS` (default 20s, under the portal limit). Fast renders return the `hosted_url` inline (backward compatible); slow ones return `{job_id, status: "pending", poll_with: "get_image_result"}`. `job_id` IS the CDI-1264 ledger `request_id`, so `get_image_result` resolves from the in-process registry first and falls back to the durable ledger by that id (recoverable across restarts/workers). The detached render owns its own ledger write (success AND failure) — the CDI-1264 ledger still fires on the async path.
 
 ### Module map
 
 - `server.py` — FastMCP app, tool definitions, orchestration, HTTP static mount.
-- `providers/` — one module per provider. Each exports an async `generate_*(prompt, width, height, ...)` returning `ProviderResult`. Dumb bytes-fetchers; no brand/sizing logic. Per the May 2026 brand-collapse change, `providers/bfl.py` and `providers/recraft.py` remain in-tree but are not reachable via the dispatcher (`route_model` raises `ProviderTemporarilyDisabled` on FLUX/Recraft hints).
+- `providers/` — `openai.py` and `gemini.py`. Each exports an async `generate_*(prompt, width, height, ...)` returning `ProviderResult`. Dumb bytes-fetchers; no brand/sizing logic.
 - `presets.py` — `PRESETS` (active brands: `casey`, `yorizon`), `CASEY_PALETTE`, `CASEY_REGISTER_OVERLAYS`, `PLATFORM_SIZES`, `route_model` (intent="raster"|"diagram"), `get_dimensions`, `get_preset(context, register)`. `ACTIVE_PROVIDERS` and `DISABLED_PROVIDERS` are surfaced via `list_models`.
 - `diagrams.py` — `parse_mermaid` (flowchart/sequenceDiagram/stateDiagram only) and `compose_render_brief` (palette-injected, register-tilted prompt for the image model). Other Mermaid types raise `MermaidParseError`.
 - `pipeline.py` — `process_image` (resize/crop → WebP → EXIF).
@@ -36,7 +36,7 @@ Package: `mcp_bildsprache` · Entry point: `mcp-bildsprache = mcp_bildsprache.se
 uv sync
 
 # Run locally in HTTP mode (what production uses)
-GEMINI_API_KEY=... BFL_API_KEY=... RECRAFT_API_KEY=... TRANSPORT=http uv run mcp-bildsprache
+OPENAI_API_KEY=... GEMINI_API_KEY=... MCP_BILDSPRACHE_API_KEY=... TRANSPORT=http uv run mcp-bildsprache
 
 # Stdio mode (default — for local MCP clients like Claude Desktop)
 uv run mcp-bildsprache
@@ -60,13 +60,13 @@ Tests mirror modules one-to-one: `tests/test_<module>.py` holds unit tests for `
 
 ## Release flow
 
-`main` is the release branch. The `release.yml` workflow runs on every push to `main` (skips if commit contains `[skip ci]` or only `*.md`/`tests/**` changed):
+`main` is protected and is the release branch. The `release.yml` workflow runs on every push to `main` (skips if the commit contains `[skip ci]` or only `*.md`/`tests/**` changed):
 
-1. `uv sync` + `uv run pytest -x`
-2. Bumps patch version in `pyproject.toml`, prepends a CHANGELOG entry from `git log`, commits as `chore(release): v<new> [skip ci]`, tags `v<new>`, pushes.
-3. Builds multi-arch (amd64/arm64) image, pushes to `ghcr.io/<repo>:<version>` and `:latest`.
+1. `uv sync` + `uv run pytest -x`, then `pip-audit`.
+2. Tags the next patch `v<new>` (tag-only: nothing is committed back, `pyproject.toml` and the CHANGELOG stay static).
+3. Builds a multi-arch image to `ghcr.io/<repo>:<version>` and `:latest`. Production does not use it (see Production deployment).
 
-Implication: **do not hand-bump the version** in `pyproject.toml` — CI owns it. Do not add a CHANGELOG entry manually; CI generates one from commit messages.
+`pyproject.toml`'s `version` therefore lags the tags; `/health` reports it plus the `git_commit` baked at build time.
 
 ## Architecture
 
@@ -81,13 +81,13 @@ tool call
       include_dogs, include_people)             [identity.py]   # [] if person-excluding
   → read reference bytes (cached per process)   [server.py]
   → route_model(context, platform, model_hint,
-      has_references=bool(refs))                [presets.py]    # picks "flux"|"gemini"|"recraft"
+      has_references=bool(refs))                [presets.py]    # picks "openai"|"gemini"
   → get_dimensions(platform) or explicit WxH    [presets.py]
   → get_preset(context) + [composition clause if @casey.berlin + refs]
     + prompt + mood                             [presets.py]    # enhanced_prompt string
   → PROVIDERS[key](enhanced_prompt, w, h,
       reference_images=refs)                    [providers/*]   # returns ProviderResult(bytes, mime, model, cost)
-      └── on Exception → (REFERENCE_FALLBACKS if refs else FALLBACKS)[key] provider
+      └── on Exception → ledger row + job error (no fallback provider)
   → process_image(...)                          [pipeline.py]   # resize+crop (ImageOps.fit) → WebP → EXIF
   → store_image(...)                            [storage.py]    # writes /data/images/<brand>/<slug>.webp + .json sidecar
   → (optional) store_raw_image(...)             [storage.py]    # provider-original bytes, "-raw" suffix
@@ -96,9 +96,8 @@ tool call
 
 Key invariants:
 - **Provider layer is dumb**: it submits a prompt (plus optional `reference_images`) and returns raw bytes + metadata. All brand/sizing/identity logic is upstream; all processing is downstream. Do not bake brand presets into providers.
-- **FLUX has its own internal fallback chain** (`flux-2-max → flux-2-pro → flux-pro-1.1`) inside `providers/bfl.py`, separate from the cross-provider `FALLBACKS` map in `server.py`. These compose: BFL retries within FLUX first, then server-level fallback hops to Gemini. **When `reference_images` are present the chain switches to `flux-2-pro (image_prompt)` and `flux-2-max` is never attempted** — falling to a text-only model would silently lose the identity signal. (`flux-kontext-pro` was dropped in the model lineup refresh, CDI-1264; FLUX/Recraft remain disabled at the dispatcher regardless.)
-- **FLUX dimension snapping**: each FLUX model has `snap` (grid) and `max_mp` constraints. The provider snaps before submission; the final pipeline re-crops to the caller's exact target dimensions. This means provider output dimensions often differ from the final output.
-- **Routing**: `route_model` defaults to FLUX for everything except vector-flavored platforms (icon/svg/logo/illustration keywords → Recraft). Gemini is never auto-selected — only via explicit `model_hint` or as a fallback. **When `has_references=True` the vector-platform override to Recraft is skipped** (Recraft would drop the refs); explicit `model_hint="recraft"` is still honoured.
+- **No fallback provider.** A provider error is recorded in the ledger and fails the job. With reference images present, never add a fallback to a text-only model: the identity signal would be lost silently.
+- **Routing**: `route_model` sends raster to OpenAI and diagrams to Gemini; an explicit `model_hint` wins. See *Provider routing* below.
 
 ### Brand presets
 
@@ -114,10 +113,10 @@ The `casey` preset injects the locked botanical palette from the 7 May 2026 bran
 
 `presets.py::route_model(intent="raster"|"diagram", model_hint?, ...)`:
 
-- `intent="raster"` (default for `generate_image`): default → OpenAI gpt-image-2. Gemini Nano Banana is the cross-provider fallback.
+- `intent="raster"` (default for `generate_image`): default → OpenAI; `_pick_raster_model` chooses gpt-image-2 for identity scenes and gpt-image-2.5-flare otherwise. Gemini is reachable only by explicit hint.
 - `intent="diagram"` (used by `generate_diagram`): default → Gemini Nano Banana Pro. OpenAI gpt-image-2 available via `model_hint="openai"`.
 - `model_hint="flux"` / `"flux-*"` / `"recraft"` → raises `ProviderTemporarilyDisabled`. The replacement message names the active provider for the caller's intent (openai for raster, gemini for diagram).
-- `providers/bfl.py` and `providers/recraft.py` remain importable + tested for shape conformance, so re-enabling is a one-PR dispatcher swap. `BFL_API_KEY` and `RECRAFT_API_KEY` env vars are still recognised but unused.
+- The FLUX/Recraft modules were deleted on 2026-06-30 (only the rejection remains). Re-adding a provider means a new `providers/` module plus a `PROVIDERS` entry in `server.py`.
 
 Tier 1 OpenAI rate-limit posture: existing `_post_with_backoff` (1s/4s/10s + jitter) absorbs 429s. Sequential dispatch — no parallel fan-out in v1. `event=image_generated` and `event=diagram_generated` log lines support cost aggregation via Komodo log queries.
 
@@ -181,13 +180,22 @@ Bulk download is client-side: the frontend `fetch`es selected WebPs, feeds them 
 - **OIDCProxy** for Keycloak (realm `cdit-mcp`, audience `mcp-bildsprache`) — this is the path Claude.ai connectors take. No DCR; credentials are pre-registered.
 - **BearerTokenVerifier** for a static API key prefixed `bmcp_` — used by Claude Code, n8n, scripts.
 
-Auth in HTTP mode is **fail-fast** (see commit `c637e42`): `_build_auth()` reads `MCP_API_KEY` (fleet standard) with fallback to `MCP_BILDSPRACHE_API_KEY` and raises `SystemExit` if neither is set, rather than silently running unauthenticated. If `KEYCLOAK_CLIENT_SECRET` is set, the server returns the full `MultiAuth` (Keycloak + bearer); if only the API key is set, the server returns a `BearerTokenVerifier` alone (the current production shape post-Keycloak-decommission).
+Auth in HTTP mode is **fail-fast** (see commit `c637e42`): `_build_auth()` reads **only** `MCP_BILDSPRACHE_API_KEY` (the fleet's one sanctioned exception to `MCP_API_KEY`; the stack's `MCP_API_KEY` var is ignored) and raises `SystemExit` if it is unset, rather than silently running unauthenticated. `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` add a Cloudflare Access JWT verifier alongside the bearer. If `KEYCLOAK_CLIENT_SECRET` is set, the server returns the full `MultiAuth` (Keycloak + bearer); if only the API key is set, the server returns a `BearerTokenVerifier` alone (the current production shape post-Keycloak-decommission).
 
 Stdio mode skips auth entirely.
 
+## fastmcp 4 idioms
+
+- Fleet conventions (tag-only releases, bearer auth behind the Cloudflare portal, usage telemetry, job + poll): `CDiT-infrastructure/docs/wiki/topics/mcp-fleet.md`.
+- Tests: the `mcp-testing` skill. Release/deploy workflow changes: the `cdit-release-pipeline` skill.
+- Bearer env is `MCP_BILDSPRACHE_API_KEY`, not `MCP_API_KEY`. Rename both sides together or auth fails fast on deploy.
+- Long renders use job + poll: 20 s inline wait (`SYNC_WAIT_SECONDS`), then `get_image_result`, whose `wait_seconds` is clamped to `POLL_WAIT_MAX_SECONDS` (20 s). The portal cuts responses at about 60 s and forwards no elicitation.
+- The gallery is Tailnet-only (`TailnetOnlyMiddleware` + docktail); its index is in memory, rebuilt from sidecars.
+- New tools or params need a Cloudflare portal catalog refresh before clients see them.
+
 ## Production deployment
 
-The server runs on the `nebula-1` host as a Docker compose stack `git-mcp-bildsprache-nebula` (container `git-mcp-bildsprache-nebula-mcp-bildsprache-1`), port `8007` → container `8000`. Static images hosted at `https://img.cdit-works.de`; MCP endpoint at `https://mcp-bildsprache.cdit-dev.de/mcp`. `FASTMCP_HOME=/data/fastmcp` and two named volumes (`fastmcp-data`, `images-data`) persist state. The stack uses `build: .` rather than pulling from ghcr — the release workflow still publishes images to `ghcr.io/caseyro/mcp-bildsprache` but production builds locally on each `deploy-stack`. This means the `/health` version string reflects whatever was in `pyproject.toml` at deploy time, which can lag the most recent CI release commit by one bump.
+The server runs on the `nebula-1` host as a Docker compose stack `git-mcp-bildsprache-nebula` (container `git-mcp-bildsprache-nebula-mcp-bildsprache-1`), port `8007` → container `8000`. Static images hosted at `https://img.cdit-works.de`; MCP endpoint at `https://mcp-bildsprache.cdit-dev.de/mcp`. `FASTMCP_HOME=/data/fastmcp` and two named volumes (`fastmcp-data`, `images-data`) persist state. The stack uses `build: .` rather than pulling from ghcr — the release workflow still publishes images to `ghcr.io/caseyro/mcp-bildsprache` but production builds from its clone on each deploy. `/health` therefore reports the static `pyproject.toml` version (it lags the tags) plus `git_commit`, which a Dockerfile stage reads from the clone's `.git`; that commit is what identifies a deploy.
 
 ## Single source of truth
 

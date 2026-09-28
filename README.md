@@ -1,13 +1,13 @@
 # mcp-bildsprache
 
-MCP server for brand-aware image generation. Active providers: OpenAI (gpt-image-2) for raster, Google Gemini (Nano Banana Pro / Nano Banana 2) for diagrams and the raster fallback. FLUX.2 and Recraft V4.1 remain in-tree but disabled at the dispatcher (re-enabling is a one-PR swap).
+MCP server for brand-aware image generation, built on FastMCP 4. Providers: OpenAI (gpt-image-2, gpt-image-2.5-flare, gpt-image-2.5-sunburst) for raster, Google Gemini (Nano Banana Pro) for diagrams; Nano Banana 2 by explicit hint. There is no automatic provider fallback. FLUX and Recraft were deleted in 2026-06; hinting at them returns `PROVIDER_TEMPORARILY_DISABLED`.
 
 ## Quick Start
 
 ```bash
 # Local development
 pip install -e .
-GEMINI_API_KEY=... BFL_API_KEY=... RECRAFT_API_KEY=... TRANSPORT=http mcp-bildsprache
+OPENAI_API_KEY=... GEMINI_API_KEY=... MCP_BILDSPRACHE_API_KEY=... TRANSPORT=http mcp-bildsprache
 
 # Docker
 docker compose up --build
@@ -42,20 +42,18 @@ docker compose up --build
   conventions injected automatically. Format scope: `flow`, `sequence`, `state`. Same async
   dispatch+poll response union as `generate_image` (`background=true` for an immediate
   job handle).
-- `get_image_result` — **NEW (CDI-1266).** Retrieve (or long-poll for) the result of an
+- `get_image_result` — (CDI-1266) Retrieve (or long-poll for) the result of an
   async render dispatched by `generate_image` / `generate_diagram`. Pass the `job_id` from
   the pending handle; returns `{status: pending | done | error | not_found, hosted_url?,
   ...}`. Optional `wait_seconds` long-polls up to a safe ceiling (`POLL_WAIT_MAX_SECONDS`,
-  default 55s, under the portal limit) before returning. Resolves from the in-process job
+  default 20s, under the portal limit) before returning. Resolves from the in-process job
   registry first, then falls back to the durable CDI-1264 ledger by `request_id == job_id`
   so results survive a container restart / different worker. Reads only local state — no
-  provider call, no cost. **Requires a Cloudflare-portal catalog refresh before it is
-  callable through the portal** (see "Portal refresh" below).
+  provider call, no cost.
 - `generate_prompt` — Prompt engineering only (no image generation).
-- `list_models` — Active providers (`openai`: gpt-image-2;
+- `list_models` — Active providers (`openai`: gpt-image-2 and the 2.5 models;
   `gemini`: Nano Banana Pro + Nano Banana 2) plus a `disabled_providers` array
-  (`bfl`, `recraft` — modules in-tree but disabled at the dispatcher per the May 2026
-  brand collapse). Also reports `identity_packs: {brand: bool}` and
+  (`bfl`, `recraft` — rejected at the dispatcher; the modules were deleted in 2026-06). Also reports `identity_packs: {brand: bool}` and
   `diagram_capable: [...]` / `diagram_formats: [...]`.
 - `get_visual_presets` — Brand visual presets for each context. Active brands:
   `casey` (with `personal` and `professional` register overlays), `yorizon`. Per-brand
@@ -67,16 +65,10 @@ docker compose up --build
 - `generation_stats` — Per-model success/failure stats from the durable CDI-1264 outcome
   ledger (success AND failure attempts) over a time window. Reads local JSONL only.
 
-## Portal refresh (new tool: `get_image_result`)
+## Portal refresh
 
-`get_image_result` (CDI-1266) is a **NEW tool**. The Cloudflare MCP portal does not
-auto-refresh its tool catalog from upstream, so until the portal catalog is refreshed the
-new tool is invisible/uncallable *through the portal* even after this server is deployed.
-The async dispatch+poll flow degrades gracefully in the meantime: `generate_image` /
-`generate_diagram` still return the `{job_id, status: "pending"}` handle (and fast renders
-still return inline), and the completed artifact remains recoverable via the *existing*
-`list_recent_generations` tool. Once the portal catalog is refreshed, the `job_id` →
-`get_image_result` poll loop becomes available end-to-end.
+The Cloudflare MCP portal does not refresh its tool catalog from upstream. A new tool or
+parameter is invisible through the portal until the catalog is refreshed there.
 
 ## Brands and registers
 
@@ -93,7 +85,7 @@ soft moss `#C7CFB8` (hairlines). Vollkorn-style typography. No all-caps anywhere
 
 Legacy brand keys (`casey-berlin`, `cdit-works`, `casey.berlin`, `@cdit`,
 `storykeep`, `nah`) all normalise to `casey`. Yorizon is fully isolated (no shared
-palette tokens). FLUX and Recraft providers are temporarily disabled at the dispatcher;
+palette tokens). FLUX and Recraft are gone;
 hinting at them returns `PROVIDER_TEMPORARILY_DISABLED` with a migration message.
 
 ## Identity packs
@@ -105,9 +97,11 @@ contract and example manifest.
 
 ## Authentication
 
-Dual auth via MultiAuth:
-- **Keycloak JWT** for Claude.ai connectors
-- **Bearer token** (`bmcp_` prefix) for Claude Code, n8n, scripts
+HTTP mode refuses to start without `MCP_BILDSPRACHE_API_KEY` (this server's name for the
+fleet's `MCP_API_KEY`). Accepted credentials:
+- **Bearer token** (`bmcp_` prefix): the Cloudflare MCP portal, Claude Code, n8n, scripts
+- **Cloudflare Access JWT** when `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` are set
+- **Keycloak OIDC** (via OIDCProxy) only if `KEYCLOAK_CLIENT_SECRET` is set; production runs without it
 
 ## Gallery (Tailnet-only)
 
