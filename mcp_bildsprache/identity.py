@@ -37,11 +37,6 @@ PERSON_EXCLUDING_MARKERS: tuple[str, ...] = (
     "svg",
 )
 
-# Slot names that the `include_dogs` override controls. Matches the
-# `@casey.berlin` manifest shape. Declared here so the override remains
-# deterministic even if a future manifest uses different primary keys.
-DOG_SLOT_NAMES: tuple[str, ...] = ("fimme", "sien")
-
 # `include_people=None` heuristic. A negation wins over a person word ("No
 # people" contains "people"); neither → the manifest rules decide.
 # ponytail: substring/word lists, not NLP; extend the lists when a prompt misfires.
@@ -280,7 +275,7 @@ def resolve_identity_for_call(
 ) -> list[Path]:
     """Wrapper around :func:`resolve_identity` that honours the overrides.
 
-    Dog slots (``DOG_SLOT_NAMES``) follow ``include_dogs``; every other slot
+    Dog slots (tagged ``dog`` in the manifest) follow ``include_dogs``; every other slot
     is a person slot and follows ``include_people``, which falls back to
     :func:`people_hint` when None. Per override: ``None`` → manifest rules,
     ``True`` → force the slots in, ``False`` → drop them. Person-excluding
@@ -299,7 +294,7 @@ def resolve_identity_for_call(
     for slot in pack.slots:
         if slot.unavailable:
             continue
-        override = include_dogs if slot.name in DOG_SLOT_NAMES else include_people
+        override = include_dogs if slot.is_dog else include_people
         keep = any(p in base_set for p in slot.files) if override is None else override
         if keep:
             result.extend(slot.files)

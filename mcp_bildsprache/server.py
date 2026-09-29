@@ -9,6 +9,7 @@ from typing import Annotated, Any, Callable, Literal
 
 import anyio
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
 from pydantic import BeforeValidator
 from mcp.types import Icon, ToolAnnotations
@@ -23,7 +24,6 @@ from mcp_bildsprache.auth import (
 )
 from mcp_bildsprache.config import settings
 from mcp_bildsprache.identity import (
-    DOG_SLOT_NAMES,
     get_loaded_packs,
     get_pack_for_context,
     load_identity_packs,
@@ -725,8 +725,8 @@ async def _dispatch_and_maybe_wait(
 
     Raises:
         Whatever the render coroutine raised, IF it failed within the inline-wait
-        window — re-raised verbatim so a fast failure matches the old synchronous
-        error contract (exact exception type + message). A failure that happens
+        window, re-raised as ``ToolError`` with the same message (the original
+        exception is chained as ``__cause__``). A failure that happens
         AFTER the wait window times out is NOT raised here (the caller already got
         a job handle); it's recorded on the job/ledger and surfaced via
         get_image_result.
@@ -760,7 +760,9 @@ async def _dispatch_and_maybe_wait(
         # exception the synchronous path would have raised (preserving type).
         exc = task.exception()
         if exc is not None:
-            raise exc
+            if isinstance(exc, ToolError):
+                raise exc
+            raise ToolError(str(exc)) from exc
         return task.result()
 
     # Did not finish in time → return a job handle. The render continues on the
@@ -834,6 +836,11 @@ def _build_auth():
 
     keycloak_secret = settings.keycloak_client_secret.get_secret_value()
     if keycloak_secret:
+        if not settings.keycloak_issuer:
+            raise SystemExit(
+                "KEYCLOAK_ISSUER is required when KEYCLOAK_CLIENT_SECRET is set. "
+                "Refusing to start without the OIDC issuer."
+            )
         return create_auth(
             api_key=api_key,
             keycloak_issuer=settings.keycloak_issuer,
@@ -1054,7 +1061,7 @@ async def generate_image(
             directly to the provider.
         include_dogs: Override the dog-slot heuristic for ``casey``:
             None = use manifest rules (default), True = force-include dog
-            slots (Sien, Fimme), False = suppress them. Ignored when no
+            slots (manifest slots tagged ``dog``), False = suppress them. Ignored when no
             identity pack is loaded for the resolved context.
         include_people: Override whether Casey's person refs attach for
             ``casey``: True = force them (gpt-image-2), False = suppress them
@@ -1103,12 +1110,11 @@ async def generate_image(
     has_refs = bool(refs_bytes)
     # Only PERSON refs make an identity scene; dogs alone don't draw a second Casey.
     person_scene = bool(reference_images) or any(
-        n not in DOG_SLOT_NAMES for n in resolved_slots
+        not s.is_dog for s in (pack.slots if pack else ()) if s.name in resolved_slots
     )
 
     # Determine provider. Per the May 2026 brand collapse, FLUX/Recraft
-    # hints raise ProviderTemporarilyDisabled; surface as a clean MCP
-    # error rather than a 500.
+    # hints raise ProviderTemporarilyDisabled; surface as a ToolError.
     try:
         selected_provider = route_model(
             context=context,
@@ -1118,23 +1124,19 @@ async def generate_image(
             intent="raster",
         )
     except ProviderTemporarilyDisabled as e:
-        return GenerateImageResult(**{
-            "error": {
-                "code": "PROVIDER_TEMPORARILY_DISABLED",
-                "provider": e.provider,
-                "replacement": e.replacement,
-                "message": e.message,
-            },
-        })
+        raise ToolError(f"PROVIDER_TEMPORARILY_DISABLED: {e.message}") from e
     specific_model, model_reason = _pick_raster_model(
         selected_provider, model, identity_scene=person_scene, why=person_why
     )
     if quality is not None or transparent:
         if selected_provider != "openai":
-            raise ValueError("quality and transparent apply to OpenAI models only")
-        check_openai_options(
-            specific_model, quality or "medium", "transparent" if transparent else "opaque"
-        )
+            raise ToolError("quality and transparent apply to OpenAI models only")
+        try:
+            check_openai_options(
+                specific_model, quality or "medium", "transparent" if transparent else "opaque"
+            )
+        except ValueError as e:
+            raise ToolError(str(e)) from e
     openai_options: dict[str, Any] = {}
     if quality:
         openai_options["quality"] = quality
@@ -1147,7 +1149,7 @@ async def generate_image(
             parts = dimensions.lower().replace(" ", "").split("x")
             w, h = int(parts[0]), int(parts[1])
         except (ValueError, IndexError):
-            raise ValueError(f"Invalid dimensions '{dimensions}'. Use 'WxH' format, e.g. '1200x630'.")
+            raise ToolError(f"Invalid dimensions '{dimensions}'. Use 'WxH' format, e.g. '1200x630'.")
     elif platform:
         w, h = get_dimensions(platform)
     else:
@@ -1316,43 +1318,22 @@ async def generate_diagram(
     )
 
     if not prompt and not mermaid:
-        return GenerateDiagramResult(**{
-            "error": {
-                "code": "INVALID_INPUT",
-                "message": "Provide exactly one of `prompt` or `mermaid`.",
-            },
-        })
+        raise ToolError("INVALID_INPUT: Provide exactly one of `prompt` or `mermaid`.")
     if prompt and mermaid:
-        return GenerateDiagramResult(**{
-            "error": {
-                "code": "INVALID_INPUT",
-                "message": "Provide either `prompt` OR `mermaid`, not both.",
-            },
-        })
+        raise ToolError("INVALID_INPUT: Provide either `prompt` OR `mermaid`, not both.")
 
     parsed = None
     if mermaid:
         try:
             parsed = parse_mermaid(mermaid)
         except MermaidParseError as e:
-            return GenerateDiagramResult(**{
-                "error": {
-                    "code": "MERMAID_PARSE_ERROR",
-                    "message": str(e),
-                    "line": e.line,
-                },
-            })
+            raise ToolError(f"MERMAID_PARSE_ERROR: {e}") from e
         if parsed.format != format:
-            return GenerateDiagramResult(**{
-                "error": {
-                    "code": "MERMAID_FORMAT_MISMATCH",
-                    "message": (
-                        f"Mermaid header is {parsed.format!r} but format "
-                        f"argument is {format!r}. Pass format='{parsed.format}' "
-                        "or use a Mermaid source that matches."
-                    ),
-                },
-            })
+            raise ToolError(
+                f"MERMAID_FORMAT_MISMATCH: Mermaid header is {parsed.format!r} but format "
+                f"argument is {format!r}. Pass format='{parsed.format}' "
+                "or use a Mermaid source that matches."
+            )
 
     # Route to provider (default gemini for diagrams).
     try:
@@ -1361,21 +1342,9 @@ async def generate_diagram(
             intent="diagram",
         )
     except ProviderTemporarilyDisabled as e:
-        return GenerateDiagramResult(**{
-            "error": {
-                "code": "PROVIDER_TEMPORARILY_DISABLED",
-                "provider": e.provider,
-                "replacement": e.replacement,
-                "message": e.message,
-            },
-        })
+        raise ToolError(f"PROVIDER_TEMPORARILY_DISABLED: {e.message}") from e
     except ValueError as e:
-        return GenerateDiagramResult(**{
-            "error": {
-                "code": "INVALID_MODEL_HINT",
-                "message": str(e),
-            },
-        })
+        raise ToolError(f"INVALID_MODEL_HINT: {e}") from e
 
     specific_model = _model_used(selected_provider, model_hint)
 
@@ -1393,15 +1362,10 @@ async def generate_diagram(
             d_parts = dimensions.lower().replace(" ", "").split("x")
             w, h = int(d_parts[0]), int(d_parts[1])
         except (ValueError, IndexError):
-            return GenerateDiagramResult(**{
-                "error": {
-                    "code": "INVALID_DIMENSIONS",
-                    "message": (
-                        f"Invalid dimensions {dimensions!r}. Use 'WxH' "
-                        "(e.g. '1600x900')."
-                    ),
-                },
-            })
+            raise ToolError(
+                f"INVALID_DIMENSIONS: Invalid dimensions {dimensions!r}. Use 'WxH' "
+                "(e.g. '1600x900')."
+            )
     elif format == "sequence":
         w, h = 1200, 1600
     else:
@@ -1502,14 +1466,7 @@ async def generate_prompt(
             context=context, platform=platform, model_hint=model, intent="raster"
         )
     except ProviderTemporarilyDisabled as e:
-        return GeneratePromptResult(**{
-            "error": {
-                "code": "PROVIDER_TEMPORARILY_DISABLED",
-                "provider": e.provider,
-                "replacement": e.replacement,
-                "message": e.message,
-            },
-        })
+        raise ToolError(f"PROVIDER_TEMPORARILY_DISABLED: {e.message}") from e
 
     parts = []
     if context:
@@ -1747,15 +1704,10 @@ async def generation_stats(
     if since:
         since_dt = _ledger._parse_ts(since)
         if since_dt is None:
-            return GenerationStatsResult(**{
-                "error": {
-                    "code": "INVALID_SINCE",
-                    "message": (
-                        f"Invalid `since` timestamp {since!r}. Use ISO-8601, "
-                        "e.g. '2026-06-01T00:00:00Z'."
-                    ),
-                },
-            })
+            raise ToolError(
+                f"INVALID_SINCE: Invalid `since` timestamp {since!r}. Use ISO-8601, "
+                "e.g. '2026-06-01T00:00:00Z'."
+            )
 
     # An explicit `since` wins; otherwise fall back to the `days` window. When
     # `since` is provided we do NOT also apply `days`.

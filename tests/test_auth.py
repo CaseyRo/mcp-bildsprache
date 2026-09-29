@@ -81,3 +81,33 @@ class TestGenerateApiKey:
     def test_generate_api_key_uniqueness(self):
         keys = {generate_api_key() for _ in range(100)}
         assert len(keys) == 100
+
+
+class TestBuildAuth:
+    """server._build_auth: OIDC needs an issuer; bearer-only mode stays valid."""
+
+    def _settings(self, **kw):
+        from pydantic import SecretStr
+
+        s = MagicMock()
+        s.transport = "http"
+        s.mcp_bildsprache_api_key = SecretStr("bmcp_test")
+        s.keycloak_client_secret = SecretStr(kw.get("secret", ""))
+        s.keycloak_issuer = kw.get("issuer", "")
+        s.cf_access_team_domain = ""
+        s.cf_access_aud = ""
+        return s
+
+    def test_oidc_without_issuer_refuses_to_start(self):
+        from mcp_bildsprache import server
+
+        with patch.object(server, "settings", self._settings(secret="secret")):
+            with pytest.raises(SystemExit, match="KEYCLOAK_ISSUER"):
+                server._build_auth()
+
+    def test_bearer_only_without_issuer(self):
+        from mcp_bildsprache import server
+
+        with patch.object(server, "settings", self._settings()):
+            auth = server._build_auth()
+        assert isinstance(auth, BearerTokenVerifier)

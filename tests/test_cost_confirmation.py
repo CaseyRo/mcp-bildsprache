@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, patch
 
 import anyio
 import pytest
+from fastmcp.exceptions import ToolError
 from PIL import Image
 
 from mcp_bildsprache.types import ProviderResult
@@ -307,7 +308,7 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_decline())
-        result = _d(await generate_diagram(format="flow", ctx=ctx))  # no prompt/mermaid
+        with pytest.raises(ToolError, match="INVALID_INPUT"):
+            await generate_diagram(format="flow", ctx=ctx)  # no prompt/mermaid
 
-        assert result["error"]["code"] == "INVALID_INPUT"
         assert ctx.elicit_called is False

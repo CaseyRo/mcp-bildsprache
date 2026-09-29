@@ -1,4 +1,4 @@
-# /health git_commit. Komodo builds from its clone, so .git is in the context;
+# /health git_commit. Builds from a git clone keep .git in the context;
 # without one (tarball, worktree) this records "unknown".
 FROM alpine/git:2.54.0 AS rev
 RUN --mount=type=bind,target=/src \

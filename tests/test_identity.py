@@ -10,7 +10,6 @@ from pathlib import Path
 from PIL import Image
 
 from mcp_bildsprache.identity import (
-    DOG_SLOT_NAMES,
     load_identity_packs,
     people_hint,
     resolve_identity,
@@ -32,18 +31,18 @@ def _default_casey_manifest() -> dict:
         "version": 1,
         "slots": {
             "casey": {"files": ["casey-1.webp"], "tags": ["person", "primary"]},
-            "fimme": {"files": ["fimme-1.webp"], "tags": ["dog"]},
-            "sien": {"files": ["sien-1.webp"], "tags": ["dog"]},
+            "dog-1": {"files": ["dog-1-1.webp"], "tags": ["dog"]},
+            "dog-2": {"files": ["dog-2-1.webp"], "tags": ["dog"]},
         },
         "rules": {
             "always_include": ["casey"],
             "include_if_prompt_matches": {
-                "fimme": ["walk", "outside", "forest", "morning", "personal"],
-                "sien": ["walk", "outside", "forest", "morning", "personal"],
+                "dog-1": ["walk", "outside", "forest", "morning", "personal"],
+                "dog-2": ["walk", "outside", "forest", "morning", "personal"],
             },
             "exclude_if_prompt_matches": {
-                "fimme": ["client", "office", "meeting"],
-                "sien": ["client", "office", "meeting"],
+                "dog-1": ["client", "office", "meeting"],
+                "dog-2": ["client", "office", "meeting"],
             },
         },
     }
@@ -76,7 +75,7 @@ class TestLoadIdentityPacks:
         assert set(packs.keys()) == {"@casey"}
         pack = packs["@casey"]
         assert isinstance(pack, IdentityPack)
-        assert [s.name for s in pack.slots] == ["casey", "fimme", "sien"]
+        assert [s.name for s in pack.slots] == ["casey", "dog-1", "dog-2"]
         assert pack.always_include == ("casey",)
 
     def test_legacy_casey_berlin_directory_still_loads(self, tmp_path: Path):
@@ -112,17 +111,17 @@ class TestLoadIdentityPacks:
         pack_dir.mkdir()
         (pack_dir / "manifest.json").write_text(json.dumps(manifest))
         _write_tiny_webp(pack_dir / "casey-1.webp")
-        _write_tiny_webp(pack_dir / "sien-1.webp")
-        # fimme-1.webp not created
+        _write_tiny_webp(pack_dir / "dog-2-1.webp")
+        # dog-1-1.webp not created
 
         with caplog.at_level(logging.WARNING, logger="mcp_bildsprache.identity"):
             packs = load_identity_packs(tmp_path)
 
         assert "@casey" in packs
         pack = packs["@casey"]
-        fimme = next(s for s in pack.slots if s.name == "fimme")
-        assert fimme.unavailable is True
-        assert any("identity_file_missing" in r.message and "fimme-1.webp" in r.message
+        dog1 = next(s for s in pack.slots if s.name == "dog-1")
+        assert dog1.unavailable is True
+        assert any("identity_file_missing" in r.message and "dog-1-1.webp" in r.message
                    for r in caplog.records)
 
 
@@ -148,7 +147,7 @@ class TestResolveIdentity:
         pack = _make_pack(tmp_path)
         result = resolve_identity(pack, "morning walk through the forest with the dogs")
         names = [p.name for p in result]
-        assert names == ["casey-1.webp", "fimme-1.webp", "sien-1.webp"]
+        assert names == ["casey-1.webp", "dog-1-1.webp", "dog-2-1.webp"]
 
     def test_exclude_wins_over_include(self, tmp_path: Path):
         pack = _make_pack(tmp_path)
@@ -177,28 +176,28 @@ class TestResolveIdentity:
         assert resolve_identity(pack, prompt) == resolve_identity(pack, prompt)
 
     def test_unavailable_slot_skipped(self, tmp_path: Path):
-        # Build a pack with fimme unavailable.
+        # Build a pack with dog-1 unavailable.
         slots = (
             IdentitySlot(name="casey", files=(tmp_path / "casey-1.webp",)),
-            IdentitySlot(name="fimme", files=(), unavailable=True),
-            IdentitySlot(name="sien", files=(tmp_path / "sien-1.webp",)),
+            IdentitySlot(name="dog-1", files=(), unavailable=True),
+            IdentitySlot(name="dog-2", files=(tmp_path / "dog-2-1.webp",)),
         )
         pack = IdentityPack(
             brand="@casey",
             slots=slots,
             always_include=("casey",),
             include_if_prompt_matches={
-                "fimme": ("walk",),
-                "sien": ("walk",),
+                "dog-1": ("walk",),
+                "dog-2": ("walk",),
             },
             exclude_if_prompt_matches={},
         )
         # Create the files that do exist so paths are well-formed (resolver
         # does not stat, but cleanup's easier this way).
         _write_tiny_webp(tmp_path / "casey-1.webp")
-        _write_tiny_webp(tmp_path / "sien-1.webp")
+        _write_tiny_webp(tmp_path / "dog-2-1.webp")
         result = resolve_identity(pack, "morning walk in the park")
-        assert [p.name for p in result] == ["casey-1.webp", "sien-1.webp"]
+        assert [p.name for p in result] == ["casey-1.webp", "dog-2-1.webp"]
 
 
 class TestResolveIdentityForCall:
@@ -213,7 +212,7 @@ class TestResolveIdentityForCall:
             pack, "late afternoon coffee at my desk", include_dogs=True
         )
         names = [p.name for p in got]
-        assert names == ["casey-1.webp", "fimme-1.webp", "sien-1.webp"]
+        assert names == ["casey-1.webp", "dog-1-1.webp", "dog-2-1.webp"]
 
     def test_false_suppresses_dogs_even_with_keywords(self, tmp_path: Path):
         pack = _make_pack(tmp_path)
@@ -229,8 +228,21 @@ class TestResolveIdentityForCall:
             pack, "a flat icon of a coffee cup", include_dogs=True
         ) == []
 
-    def test_dog_slot_names_constant(self):
-        assert set(DOG_SLOT_NAMES) == {"fimme", "sien"}
+    def test_dog_slots_come_from_manifest_tags(self, tmp_path: Path):
+        manifest = {
+            "version": 1,
+            "slots": {
+                "casey": {"files": ["casey-1.webp"], "tags": ["person"]},
+                "rex": {"files": ["rex-1.webp"], "tags": ["dog"]},
+                "friend": {"files": ["friend-1.webp"], "tags": ["person"]},
+            },
+            "rules": {"always_include": ["casey", "rex", "friend"]},
+        }
+        _write_pack(tmp_path, "casey", manifest)
+        pack = next(iter(load_identity_packs(tmp_path).values()))
+        assert [s.name for s in pack.slots if s.is_dog] == ["rex"]
+        got = resolve_identity_for_call(pack, "at the desk", include_dogs=False)
+        assert [p.name for p in got] == ["casey-1.webp", "friend-1.webp"]
 
 
 class TestIncludePeople:
@@ -257,7 +269,7 @@ class TestIncludePeople:
     def test_negation_keeps_dogs(self, tmp_path: Path):
         pack = _make_pack(tmp_path)
         assert self._names(pack, "morning walk in the forest, no people") == [
-            "fimme-1.webp", "sien-1.webp"
+            "dog-1-1.webp", "dog-2-1.webp"
         ]
 
     def test_person_words_attach_refs(self, tmp_path: Path):

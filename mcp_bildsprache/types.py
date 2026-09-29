@@ -51,11 +51,12 @@ class ProviderResult:
 
 @dataclass(frozen=True, slots=True)
 class IdentitySlot:
-    """A single slot in an identity pack (e.g. "casey", "fimme", "sien").
+    """A single slot in an identity pack (e.g. "casey", "dog-1").
 
     ``files`` is the ordered list of image paths on disk for this slot.
-    ``tags`` are free-form labels (e.g. "person", "dog") kept for debugging
-    and future use — resolution does not currently read them.
+    ``tags`` are free-form labels (e.g. "person", "dog"). A slot tagged
+    ``dog`` is a dog slot: ``include_dogs`` controls it, and it never makes
+    a scene an identity (person) scene.
     ``unavailable`` is set at load time when one or more declared files are
     missing on disk; the loader logs a WARN per missing file.
     """
@@ -64,6 +65,10 @@ class IdentitySlot:
     files: tuple[Path, ...]
     tags: tuple[str, ...] = ()
     unavailable: bool = False
+
+    @property
+    def is_dog(self) -> bool:
+        return "dog" in self.tags
 
 
 @dataclass(frozen=True, slots=True)

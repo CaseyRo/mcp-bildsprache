@@ -51,12 +51,12 @@ class TestBaseUrl:
     def test_base_url_from_public_url(self):
         with patch.dict(
             "os.environ",
-            {"MCP_BILDSPRACHE_PUBLIC_URL": "https://bildsprache.cdit-dev.de/"},
+            {"MCP_BILDSPRACHE_PUBLIC_URL": "https://bildsprache.example.com/"},
             clear=True,
         ):
             s = Settings()
         # Trailing slash should be stripped
-        assert s.base_url == "https://bildsprache.cdit-dev.de"
+        assert s.base_url == "https://bildsprache.example.com"
 
     def test_base_url_fallback_to_host_port(self):
         with patch.dict("os.environ", {}, clear=True):

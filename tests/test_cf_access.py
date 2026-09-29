@@ -43,6 +43,6 @@ async def test_non_http_scope_does_not_crash():
 
 def test_verifier_gating():
     assert build_cf_access_verifier("", "") is None
-    assert build_cf_access_verifier("cdit-dev.cloudflareaccess.com", "") is None
+    assert build_cf_access_verifier("example.cloudflareaccess.com", "") is None
     assert build_cf_access_verifier("", "aud123") is None
-    assert build_cf_access_verifier("cdit-dev.cloudflareaccess.com", "aud123") is not None
+    assert build_cf_access_verifier("example.cloudflareaccess.com", "aud123") is not None

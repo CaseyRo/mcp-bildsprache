@@ -77,16 +77,18 @@ class Settings(BaseSettings):
     mcp_bildsprache_api_key: SecretStr = SecretStr("")
     mcp_bildsprache_public_url: str = ""
 
-    # Keycloak OIDC
-    keycloak_issuer: str = "https://auth.cdit-works.de/realms/cdit-mcp"
+    # Keycloak OIDC. Enabled when KEYCLOAK_CLIENT_SECRET is set; the issuer
+    # (e.g. https://auth.example.com/realms/<realm>) is then required and the
+    # server refuses to start without it.
+    keycloak_issuer: str = ""
     keycloak_audience: str = "mcp-bildsprache"
     keycloak_client_id: str = "mcp-bildsprache"
     keycloak_client_secret: SecretStr = SecretStr("")
 
-    # Cloudflare Access (Managed OAuth on the mcp-bs hostname). When both are set,
+    # Cloudflare Access (Managed OAuth). When both are set,
     # a request carrying a valid Cf-Access-Jwt-Assertion (team-signed, aud-matched)
     # authenticates without a bmcp_ bearer — the portal-less GitHub-gated path.
-    cf_access_team_domain: str = ""  # e.g. cdit-dev.cloudflareaccess.com
+    cf_access_team_domain: str = ""  # e.g. <team>.cloudflareaccess.com
     cf_access_aud: str = ""          # the Access application AUD tag
 
     # Gallery (Tailnet-only browse/download UI)
