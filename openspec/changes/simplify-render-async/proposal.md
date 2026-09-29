@@ -9,7 +9,7 @@ Image generation is effectively dead — no successful render since 2026-06-18 (
 
 When the loop is frozen, **every** MCP call returns `-32001` — including the `background:true` dispatch that should return instantly — and scheduled render tasks never run (no artifact, no ledger record). That is CDI-1312 exactly. CDI-1253/1266 (portal/session timeouts) are real but secondary.
 
-Compounding the fragility, the server hand-rolled ~500 lines of async-dispatch machinery (`jobs.py` `JobRegistry` + `spawn_detached`, `_dispatch_and_maybe_wait`, `get_image_result`, the ledger cross-worker fallback, `background`/`job_id` params on two tools) that reinvents FastMCP 3.x's native `@mcp.tool(task=True)` background tasks. And the May 2026 brand collapse left dead code: FLUX/Recraft providers disabled at the dispatcher but still in-tree (~400 lines), plus `FALLBACKS`/`REFERENCE_FALLBACKS` that are byte-identical and map every provider to `None` (a no-op fallback system).
+Compounding the fragility, the server hand-rolled ~500 lines of async-dispatch machinery (`jobs.py` `JobRegistry` + `spawn_detached`, `_dispatch_and_maybe_wait`, `get_image_result`, the ledger cross-worker fallback, `background`/`job_id` params on two tools) that reinvents FastMCP's native `@mcp.tool(task=True)` background tasks. And the May 2026 brand collapse left dead code: FLUX/Recraft providers disabled at the dispatcher but still in-tree (~400 lines), plus `FALLBACKS`/`REFERENCE_FALLBACKS` that are byte-identical and map every provider to `None` (a no-op fallback system).
 
 ## What Changes
 

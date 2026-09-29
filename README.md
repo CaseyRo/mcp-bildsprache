@@ -1,111 +1,123 @@
 # mcp-bildsprache
 
-MCP server for brand-aware image generation, built on FastMCP 4. Providers: OpenAI (gpt-image-2, gpt-image-2.5-flare, gpt-image-2.5-sunburst) for raster, Google Gemini (Nano Banana Pro) for diagrams; Nano Banana 2 by explicit hint. There is no automatic provider fallback. FLUX and Recraft were deleted in 2026-06; hinting at them returns `PROVIDER_TEMPORARILY_DISABLED`.
+An MCP server for brand-aware image generation. It takes a prompt and a brand context, injects that brand's visual preset (palette, mood, composition rules), renders the image with OpenAI or Google Gemini, then resizes, converts to WebP, embeds provenance metadata, and stores the result under a hosted URL. It also renders flow, sequence and state diagrams from free text or Mermaid. It is built for a small set of brands owned by one studio, so the presets are specific to them; the pipeline, job handling and gallery are reusable if you swap in your own presets. Built on [FastMCP](https://gofastmcp.com) 4.
 
-## Quick Start
+## Requirements
+
+- Python 3.11 or newer
+- FastMCP 4 (`fastmcp>=4.0.10,<5.0.0`, installed as a dependency)
+- An OpenAI API key (raster images) and a Google Gemini API key (diagrams). A missing key disables that provider; the server still starts.
+
+## Install and run
+
+### Local
 
 ```bash
-# Local development
-pip install -e .
-OPENAI_API_KEY=... GEMINI_API_KEY=... MCP_BILDSPRACHE_API_KEY=... TRANSPORT=http mcp-bildsprache
+uv sync
+uv run mcp-bildsprache                    # stdio, for a local MCP client
 
-# Docker
-docker compose up --build
+OPENAI_API_KEY=... GEMINI_API_KEY=... MCP_BILDSPRACHE_API_KEY=change-me \
+  IMAGE_STORAGE_PATH=./data/images TRANSPORT=http uv run mcp-bildsprache
 ```
 
-## MCP Tools
+In HTTP mode the MCP endpoint is `/mcp`, stored images are served from `/`, and `/health` reports the version and git commit.
 
-- `generate_image` — Full image generation with brand preset injection.
-  Default raster path: OpenAI at medium quality: gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise (`OPENAI_IMAGE_MODEL` forces one). Per call,
-  `model` picks `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst` (premium/editing);
-  `quality` (`low`…`high`, `auto`; `xhigh`/`max` on 2.5) and `transparent` (2.5 only) are
-  OpenAI options. The retired `gpt-image-1.5` / `gpt-image-1-mini` hints map to gpt-image-2.
-  Optional `register: 'personal' | 'professional'` for the casey brand (May 2026 brand
-  collapse). Optional `reference_images: list[bytes]` forwards reference images to OpenAI
-  (or auto-resolves from the brand's identity pack when `context` is set). Optional
-  `include_dogs: bool | None` overrides the dog-slot heuristic for casey (True =
-  force-include Sien + Fimme, False = suppress, None = use manifest rules). Optional
-  `include_people: bool | None` does the same for Casey's person refs; None reads the
-  prompt ("no people"/"still life"/"keine Personen" → none, a person word → refs, neither →
-  manifest rules). Only person refs route the default model to gpt-image-2; else flare.
-  **Async dispatch+poll (CDI-1266):** the response is a UNION — a fast render returns the
-  `hosted_url` inline as before; a slow render (gpt-image-2 / Nano-Banana-Pro take 50-80s,
-  past the ~60s Cloudflare-portal timeout) returns `{job_id, status: "pending", poll_with:
-  "get_image_result"}` immediately while the render keeps running server-side. The render
-  is detached from the request scope so it survives the portal teardown. Inline-wait budget
-  is `SYNC_WAIT_SECONDS` (default 20s, under the portal limit); pass `background=true` (or
-  set `SYNC_WAIT_SECONDS=0`) to always get the job handle. Poll with `get_image_result`.
-- `generate_diagram` — Flow / sequence / state diagrams via Gemini Nano Banana Pro
-  (`gemini-3-pro-image-preview`, default — top editing/control + 4K brand graphics) or
-  OpenAI gpt-image-2 (`model_hint='openai'`). Accepts free-text `prompt` OR Mermaid
-  `mermaid` source (parsed into a structured render brief). Brand palette + UML
-  conventions injected automatically. Format scope: `flow`, `sequence`, `state`. Same async
-  dispatch+poll response union as `generate_image` (`background=true` for an immediate
-  job handle).
-- `get_image_result` — (CDI-1266) Retrieve (or long-poll for) the result of an
-  async render dispatched by `generate_image` / `generate_diagram`. Pass the `job_id` from
-  the pending handle; returns `{status: pending | done | error | not_found, hosted_url?,
-  ...}`. Optional `wait_seconds` long-polls up to a safe ceiling (`POLL_WAIT_MAX_SECONDS`,
-  default 20s, under the portal limit) before returning. Resolves from the in-process job
-  registry first, then falls back to the durable CDI-1264 ledger by `request_id == job_id`
-  so results survive a container restart / different worker. Reads only local state — no
-  provider call, no cost.
-- `generate_prompt` — Prompt engineering only (no image generation).
-- `list_models` — Active providers (`openai`: gpt-image-2 and the 2.5 models;
-  `gemini`: Nano Banana Pro + Nano Banana 2) plus a `disabled_providers` array
-  (`bfl`, `recraft` — rejected at the dispatcher; the modules were deleted in 2026-06). Also reports `identity_packs: {brand: bool}` and
-  `diagram_capable: [...]` / `diagram_formats: [...]`.
-- `get_visual_presets` — Brand visual presets for each context. Active brands:
-  `casey` (with `personal` and `professional` register overlays), `yorizon`. Per-brand
-  responses include `identity_pack_loaded: bool` and the matching register overlay
-  when `register` is supplied.
-- `list_recent_generations` — List the most recently generated artifacts (newest first),
-  reading the on-disk sidecar index. Broad recovery path when a render's response was lost
-  to a portal timeout and you don't have the `job_id`. Optional `brand` / `limit` / `offset`.
-- `generation_stats` — Per-model success/failure stats from the durable CDI-1264 outcome
-  ledger (success AND failure attempts) over a time window. Reads local JSONL only.
+### Docker
 
-## Portal refresh
+The image builds from source:
 
-The Cloudflare MCP portal does not refresh its tool catalog from upstream. A new tool or
-parameter is invisible through the portal until the catalog is refreshed there.
+```bash
+docker compose up -d --build
+```
 
-## Brands and registers
+`compose.yaml` keeps state in three named volumes: `images-data` (generated images, sidecars and the outcome ledger), `fastmcp-data`, and `identity-data` (optional reference images, mounted read-only). Its defaults are tuned for the author's deployment; override the environment variables below for your own.
 
-Active brands (May 2026 brand collapse): **casey**, **yorizon**.
+## Configuration
 
-The `casey` brand carries one shared visual DNA across two registers:
-
-- `personal` — recognition surface, warmer kitchen-table mood, more bone, lower contrast.
-- `professional` — verification surface, crisper schematic clarity, more white space.
-
-Locked botanical palette: paper bone `#F4EFE3` (background, ~70%), forest moss
-`#2C4A38` (primary), pine ink `#1F2E26` (text), weathered ochre `#B8884A` (accent ≤5%),
-soft moss `#C7CFB8` (hairlines). Vollkorn-style typography. No all-caps anywhere.
-
-Legacy brand keys (`casey-berlin`, `cdit-works`, `casey.berlin`, `@cdit`,
-`storykeep`, `nah`) all normalise to `casey`. Yorizon is fully isolated (no shared
-palette tokens). FLUX and Recraft are gone;
-hinting at them returns `PROVIDER_TEMPORARILY_DISABLED` with a migration message.
-
-## Identity packs
-
-Personal-likeness reference images for brands like `@casey.berlin` live on
-a private Docker volume (`identity-data` → `/data/identity/`). See
-[`docs/identity/README.md`](docs/identity/README.md) for the volume
-contract and example manifest.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | empty | OpenAI key for raster images |
+| `GEMINI_API_KEY` | empty | Gemini key for diagrams, and raster by explicit hint |
+| `OPENAI_IMAGE_MODEL` | empty | Force one OpenAI model; empty lets the server choose per call |
+| `TRANSPORT` | `stdio` | `stdio` or `http` (the Docker image uses `http`) |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address and port |
+| `MCP_BILDSPRACHE_API_KEY` | none | Bearer token for HTTP mode. This server uses this name instead of `MCP_API_KEY`. |
+| `MCP_BILDSPRACHE_PUBLIC_URL` | empty | Public origin, used in OAuth metadata |
+| `IMAGE_DOMAIN` | the author's image host | Base URL for `hosted_url`; point it at wherever `/` of this server is published |
+| `IMAGE_STORAGE_PATH` | `/data/images` | Where images and JSON sidecars are written |
+| `LEDGER_ENABLED` / `LEDGER_PATH` | `true` / `<IMAGE_STORAGE_PATH>/_ledger/generations.jsonl` | Append-only outcome ledger, one line per generation attempt |
+| `SYNC_WAIT_SECONDS` | `20` | Inline wait before a render is handed back as a job (0 always returns a job) |
+| `POLL_WAIT_MAX_SECONDS` | `20` | Ceiling for `get_image_result(wait_seconds=...)` |
+| `IDENTITY_ENABLED` / `IDENTITY_DIR` | `true` / `/data/identity` | Optional reference-image packs, see below |
+| `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` | empty | Optional Cloudflare Access JWT verification |
+| `KEYCLOAK_ISSUER`, `KEYCLOAK_AUDIENCE`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET` | see `config.py` | Optional OIDC login, active only when the client secret is set |
+| `GALLERY_ENABLED` | `true` | Mount the browse UI at `/gallery` |
+| `GALLERY_TAILNET_HOSTNAME` | unset | Only requests with this `Host` header may reach `/gallery`; unset means no host check |
+| `GALLERY_REINDEX_INTERVAL_SECONDS` | `300` | How often the gallery index is rebuilt from sidecars |
 
 ## Authentication
 
-HTTP mode refuses to start without `MCP_BILDSPRACHE_API_KEY` (this server's name for the
-fleet's `MCP_API_KEY`). Accepted credentials:
-- **Bearer token** (`bmcp_` prefix): the Cloudflare MCP portal, Claude Code, n8n, scripts
-- **Cloudflare Access JWT** when `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` are set
-- **Keycloak OIDC** (via OIDCProxy) only if `KEYCLOAK_CLIENT_SECRET` is set; production runs without it
+Stdio mode has no auth. HTTP mode refuses to start without `MCP_BILDSPRACHE_API_KEY`, and MCP requests must send `Authorization: Bearer <key>`. Two optional verifiers can be added: a Cloudflare Access JWT verifier (when `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` are set) and an OIDC proxy (when `KEYCLOAK_CLIENT_SECRET` is set). Stored images under `/` are public by design, because they are meant to be embedded.
 
-## Gallery (Tailnet-only)
+## Tools
 
-Browse every generated image, filter/search, and download in bulk at the
-internal gallery hostname (e.g. `https://bildsprache-gallery.<tailnet>.ts.net/gallery/`).
-The public `/mcp` endpoint and `https://img.cdit-works.de/<brand>/*.webp`
-static routes are unchanged. See `CLAUDE.md` → *Gallery* for details.
+| Tool | What it does |
+| --- | --- |
+| `generate_image` | Render an image with the brand preset for `context`, sized for `platform` or explicit `dimensions`. Optional `model`, `quality`, `transparent`, `register`, `reference_images`, `raw`, `background`. Returns a result or a job handle. |
+| `generate_diagram` | Render a flow, sequence or state diagram from `prompt` or `mermaid` source. Gemini by default, OpenAI with `model_hint="openai"`. Returns a result or a job handle. |
+| `get_image_result` | Fetch or long-poll the result of a pending render by `job_id`. Reads local state only. |
+| `generate_prompt` | Return the engineered prompt without calling a provider |
+| `list_models` | Active providers and models, disabled providers, diagram support, whether reference packs are loaded |
+| `get_visual_presets` | Brand presets, optionally filtered by `context` and `register` |
+| `list_recent_generations` | Newest generated images from the on-disk index, to recover a result whose response was lost |
+| `generation_stats` | Per-model success and failure counts from the outcome ledger |
+
+Resources: `bildsprache://presets`, `bildsprache://palette/casey`, `bildsprache://platforms`, `bildsprache://models`, `bildsprache://status`. Prompts: `brand_image_brief`, `mermaid_to_diagram`.
+
+Providers: OpenAI (gpt-image-2 and the gpt-image-2.5 models) for raster, Gemini (Nano Banana Pro) for diagrams. There is no automatic fallback between providers; a provider error fails the job. A failure within the inline wait surfaces as an MCP tool error; a failure after that is reported by `get_image_result` as `status: error`.
+
+### Long renders: job and poll
+
+Some renders take 50 to 80 seconds, longer than many proxies hold a request open. `generate_image` and `generate_diagram` therefore start the render in the background and wait up to `SYNC_WAIT_SECONDS` (20 s):
+
+1. A render that finishes in time returns its result inline, including `hosted_url`.
+2. A slower one returns `{job_id, status: "pending", poll_with: "get_image_result"}` while the render continues.
+3. Call `get_image_result(job_id, wait_seconds=20)` until `status` is `done` (with `hosted_url`) or `error`. Unknown ids return `not_found`.
+
+Pass `background=true` to always get the job handle immediately. Results are also written to a durable ledger, so a `job_id` still resolves after a restart.
+
+### Usage telemetry
+
+A small middleware (`usage.py`) writes one JSON line per tool call to stderr with the server name, tool name, duration, outcome and protocol version. It never logs arguments or results.
+
+## Brands and reference images
+
+Brand presets live in `mcp_bildsprache/presets.py`. `get_visual_presets` and `list_models` report what is configured. To use the server for your own brand, edit the presets and slug prefixes there.
+
+A brand can optionally have an identity pack: a manifest plus reference images, kept on a private volume and never committed. When present, matching references are sent to the provider so recurring people or subjects stay recognizable. See [docs/identity/README.md](docs/identity/README.md) for the manifest format.
+
+## Gallery
+
+In HTTP mode the server can serve a small browser UI at `/gallery/` to browse, filter, search and bulk-download generated images. Its index is built in memory from the JSON sidecars. The gallery has no login of its own: expose it only on a private network, and set `GALLERY_TAILNET_HOSTNAME` (any private hostname) so requests arriving under another host get a 404.
+
+## Development
+
+```bash
+uv sync
+uv run pytest
+uv run ruff check .
+```
+
+CI (`.github/workflows/ci.yml`) runs the tests as the `test` check on every pull request. `main` is protected and changes land through pull requests.
+
+## Releases
+
+Releases are tag-only. After a merge to `main`, the release workflow tests the code and pushes the next `v*` patch tag; nothing is committed back to `main`, so the `version` in `pyproject.toml` lags the tags. Deployments build the Docker image from source, and `/health` reports the deployed git commit.
+
+## Support
+
+If this server saves you time, you can [buy me a coffee](https://buymeacoffee.com/caseyberlin).
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Casey Romkes.

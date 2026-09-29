@@ -129,7 +129,7 @@ The compose file already supports `docktail` labels for exposing services select
 - *IP allowlist in application code*: a request-level check that the caller's IP is in a Tailnet CIDR. Works, but reinvents what docktail + Tailscale already do, and it's one bug away from leaking. Only a fallback if docktail can't be used for some reason.
 - *Reuse the existing MCP auth (Keycloak + bearer)*: wrong tool. The gallery is a browser UI for one user, not a programmatic MCP client. Signing into Keycloak to browse thumbnails is the wrong UX.
 
-Implementation shape: the gallery's routes live on the same Starlette app but the app is exposed over two hostnames — the public `bildsprache.cdit-dev.de` (Cloudflare tunnel; only `/mcp` and `/<brand>/*` reachable) and the internal `bildsprache-gallery.*.ts.net` (docktail; all paths reachable). An app-level middleware on `/gallery/*` refuses the request when the inbound `Host` header isn't the Tailnet hostname — this is a cheap, auditable second line of defense against misconfiguration.
+Implementation shape: the gallery's routes live on the same Starlette app but the app is exposed over two hostnames — the public `<public-host>` (Cloudflare tunnel; only `/mcp` and `/<brand>/*` reachable) and the internal `bildsprache-gallery.*.ts.net` (docktail; all paths reachable). An app-level middleware on `/gallery/*` refuses the request when the inbound `Host` header isn't the Tailnet hostname — this is a cheap, auditable second line of defense against misconfiguration.
 
 ### 6. Bulk download: client-side ZIP with `fflate`
 
@@ -188,7 +188,7 @@ Lifespan shutdown cancels the background task. All tied into FastMCP's `http_app
 - **[In-memory index grows unbounded over years]** → At current pace probably fine for a long time; at some point, the full scan on every reindex becomes slow. Mitigation: incremental reindex (stat-based diff against last scan) as a follow-up. Not needed for v1.
 - **[Client-side zip blows up RAM on huge selections]** → Soft 250 MB cap with a clear disabled-state tooltip. Users can always fall back to selecting fewer images and running the download twice.
 - **[Sidecars may be incomplete on older entries]** → Before some fields existed (e.g. `platform`), sidecars don't have them. Index fields are `Optional`, and the UI renders em-dashes for missing values. Not a bug, a visible gap.
-- **[Docktail label misconfig exposes gallery publicly]** → The Host-header middleware on `/gallery/*` is the second gate. Additionally, the migration plan includes a post-deploy check (`curl https://bildsprache.cdit-dev.de/gallery/` must 404 or 400, not 200) before declaring done.
+- **[Docktail label misconfig exposes gallery publicly]** → The Host-header middleware on `/gallery/*` is the second gate. Additionally, the migration plan includes a post-deploy check (`curl https://<public-host>/gallery/` must 404 or 400, not 200) before declaring done.
 - **[Race between reindex and `generate_image` writing new files]** → The scanner reads JSONs atomically (open → read → close). Partial writes are already avoided upstream by writing to a temp file and renaming. Worst case: a sidecar appears mid-scan and is missed this tick; picked up next tick. Acceptable.
 - **[Filter by prompt text on mobile keyboards]** → Free-text search against lowered prompt strings is fine for a few thousand entries but can feel laggy if typed quickly. Debounce 200 ms on input; run the filter in a `requestIdleCallback`.
 - **[Adding assets to the image increases layer size]** → ~30 KB of static frontend + `fflate`. Negligible in a container already shipping Pillow, pydantic, httpx, FastMCP.
@@ -200,8 +200,8 @@ Lifespan shutdown cancels the background task. All tied into FastMCP's `http_app
 3. On the production host, update `compose.yaml`: add the docktail label exposing the new internal hostname; recreate the stack.
 4. Verify:
    - `curl -H 'Host: bildsprache-gallery.<tailnet>.ts.net' https://<internal>/gallery/` → 200 (HTML shell).
-   - `curl https://bildsprache.cdit-dev.de/gallery/` → 400 (rejected by middleware).
-   - `curl https://bildsprache.cdit-dev.de/mcp` → still works.
+   - `curl https://<public-host>/gallery/` → 400 (rejected by middleware).
+   - `curl https://<public-host>/mcp` → still works.
    - `curl https://img.cdit-works.de/<brand>/<existing>.webp` → still works.
 5. Open the gallery in browser (desktop + iOS Safari), verify grid, list, filters, select, ZIP download.
 6. Rollback: revert to prior image tag; remove the docktail label. No schema migrations, no destructive changes.

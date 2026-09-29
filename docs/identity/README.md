@@ -2,7 +2,7 @@
 
 This directory documents the **contract** for the `identity-data` Docker volume.
 No actual identity imagery is committed to this repo — personal likeness stays
-private and lives only on the production host.
+private and lives only on the host that runs the server.
 
 ## Volume layout
 
@@ -12,19 +12,16 @@ image files it names:
 
 ```
 /data/identity/
-  casey-berlin/
+  <brand-dir>/
     manifest.json
-    casey-1.webp
-    casey-2.webp
-    fimme-1.webp
-    sien-1.webp
+    <slot>-1.webp
+    <slot>-2.webp
   <other-brand>/
     manifest.json
     ...
 ```
 
-Brand directory names match `mcp_bildsprache.slugs.BRAND_PREFIXES` values
-(e.g. `@casey.berlin` → `casey-berlin`).
+Brand directory names match `mcp_bildsprache.slugs.BRAND_PREFIXES` values.
 
 ## Manifest shape
 
@@ -45,33 +42,30 @@ Summary:
 
 ## Populating the volume
 
-The volume is populated out-of-band on the production host
-(`ubuntu-smurf-mirror`), typically via `scp` over Tailscale:
+Copy the brand directories into the `identity-data` volume out-of-band, for
+example with a throwaway container:
 
 ```bash
-# from your laptop
-scp -r ./casey-berlin ubuntu-smurf-mirror:/tmp/identity-staging/
-ssh ubuntu-smurf-mirror
-# on the host
 docker run --rm \
   -v identity-data:/data/identity \
-  -v /tmp/identity-staging:/src:ro \
+  -v "$PWD/identity-staging":/src:ro \
   alpine sh -c 'cp -R /src/* /data/identity/'
-docker compose -f /opt/mcp-bildsprache/compose.yaml restart
+docker compose restart
 ```
 
-The server loads the manifest once at startup and caches it in process memory
-for the life of the container. Edit → restart to pick up changes.
+The server loads the manifests once at startup and caches them in process
+memory for the life of the container. Edit, then restart to pick up changes.
+
+## Slot names
+
+Slot names are free-form. A slot whose `tags` include `dog` follows the
+`include_dogs` override; every other slot follows `include_people`.
 
 ## File conventions
 
-- WebP or JPEG, roughly 200–500 KB each (they are uploaded to the provider on
-  every call that uses them).
-- Square-ish or portrait orientation works best for the single-input FLUX
-  reference path; extreme aspect ratios are collaged sub-optimally.
-- Keep the per-slot `files` list short (1–2 images). The first file wins for
-  single-input providers like `flux-2-pro` (the FLUX reference model after
-  `flux-kontext-pro` was dropped — model lineup refresh, CDI-1264).
+- WebP or JPEG, roughly 200 to 500 KB each (they are uploaded to the provider
+  on every call that uses them).
+- Keep the per-slot `files` list short (1 or 2 images).
 
 ## Safe degradation
 
