@@ -13,6 +13,14 @@ from PIL import Image
 from mcp_bildsprache.storage import StorageError
 from mcp_bildsprache.types import ProviderResult
 
+# Inline-wait budget for tests that expect a render to come back inline
+# (hosted_url, not a {job_id, status: pending} handle). It must be set
+# explicitly: a bare patched `settings` is a MagicMock, and
+# int(MagicMock()) == 1, which silently gave these tests a 1s budget that a
+# loaded machine can exceed. The wait returns as soon as the render is done,
+# so a generous value costs nothing on the happy path.
+INLINE_WAIT = 30
+
 
 def _d(result):
     """Tools return pydantic models; compare against the wire shape."""
@@ -50,7 +58,7 @@ class TestGenerateImageHosting:
     async def test_hosting_enabled_returns_hosted_url(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)
@@ -90,7 +98,7 @@ class TestGenerateImageHosting:
     async def test_always_returns_hosted_url(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -107,7 +115,7 @@ class TestRawMode:
     async def test_raw_returns_url_not_base64(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)
@@ -134,7 +142,7 @@ class TestRawMode:
     async def test_raw_false_excludes_raw(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)
@@ -165,7 +173,7 @@ class TestNoFallback:
         providers = {"openai": failing_mock, "gemini": success_mock}
 
         with patch("mcp_bildsprache.server.PROVIDERS", providers), \
-             patch("mcp_bildsprache.server.settings"), \
+             patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -182,7 +190,7 @@ class TestNoFallback:
         """StorageError should propagate — no base64 fallback."""
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT), \
              patch("mcp_bildsprache.server.store_image", side_effect=StorageError("disk full")):
             with pytest.raises(ToolError, match="disk full"):
                 _d(await generate_image(prompt="test storage fail", dimensions="512x512"))
@@ -193,7 +201,7 @@ class TestDimensionHandling:
     async def test_explicit_dimensions_override_platform(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -214,7 +222,7 @@ class TestDimensionHandling:
     async def test_default_dimensions_1200x1200(self, tmp_path: Path, mock_provider):
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -278,7 +286,7 @@ class TestIdentityIntegration:
         identity_root = self._write_identity_pack(tmp_path)
         set_loaded_packs(load_identity_packs(identity_root))
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path / "out")
@@ -322,7 +330,7 @@ class TestIdentityIntegration:
         identity_root = self._write_identity_pack(tmp_path)
         set_loaded_packs(load_identity_packs(identity_root))
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path / "out")
@@ -355,7 +363,7 @@ class TestIdentityIntegration:
         identity_root = self._write_identity_pack(tmp_path)
         set_loaded_packs(load_identity_packs(identity_root))
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path / "out")
@@ -384,7 +392,7 @@ class TestIdentityIntegration:
 
         caller_ref = b"caller-supplied-bytes-x"
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path / "out")
@@ -815,7 +823,7 @@ class TestProgressLogGuard:
         # No elicitation handler → _confirm_cost proceeds.
         ctx.elicit.side_effect = anyio.ClosedResourceError()
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
@@ -1004,7 +1012,7 @@ class TestAsyncDispatchPoll:
 
             # The dispatching call has returned; the render is still running on a
             # detached task. Poll until it finishes (long-poll does the waiting).
-            polled = _d(await get_image_result(job_id, wait_seconds=5))
+            polled = _d(await get_image_result(job_id, wait_seconds=INLINE_WAIT))
 
         assert polled["status"] == "done"
         assert polled["source"] == "registry"
@@ -1058,7 +1066,7 @@ class TestAsyncDispatchPoll:
             assert first["source"] == "registry"
 
             # Long-poll until done.
-            second = _d(await get_image_result(job_id, wait_seconds=5))
+            second = _d(await get_image_result(job_id, wait_seconds=INLINE_WAIT))
 
         assert second["status"] == "done"
         assert second["hosted_url"].startswith("https://img.cdit-works.de/casey/")
@@ -1094,7 +1102,7 @@ class TestAsyncDispatchPoll:
                 prompt="will fail", context="casey", dimensions="512x512"
             ))
             job_id = dispatched["job_id"]
-            polled = _d(await get_image_result(job_id, wait_seconds=5))
+            polled = _d(await get_image_result(job_id, wait_seconds=INLINE_WAIT))
 
         assert polled["status"] == "error"
         assert "provider exploded" in polled["error"]
@@ -1219,7 +1227,7 @@ class TestGenerationLedgerWiring:
 
         ledger_file = self._point_ledger_at(tmp_path, monkeypatch)
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
@@ -1255,7 +1263,7 @@ class TestGenerationLedgerWiring:
         failing = AsyncMock(side_effect=RuntimeError("OpenAI 500 boom"))
 
         with patch("mcp_bildsprache.server.PROVIDERS", {"openai": failing, "gemini": failing}), \
-             patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.openai_image_model = "gpt-image-2"
@@ -1295,7 +1303,7 @@ class TestGenerationLedgerWiring:
 
         provider = AsyncMock(side_effect=fake_openai)
         with patch("mcp_bildsprache.server.PROVIDERS", {"openai": provider, "gemini": provider}), \
-             patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.openai_image_model = "gpt-image-2"
@@ -1395,7 +1403,7 @@ class TestGenerationLedgerWiring:
         monkeypatch.setattr(cfg, "ledger_enabled", True)
         monkeypatch.setattr(cfg, "ledger_path", str(blocker / "sub" / "led.jsonl"))
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             s.image_storage_path = str(tmp_path)
@@ -1475,7 +1483,7 @@ class TestGenerateDiagramTool:
     ):
         from mcp_bildsprache.server import generate_diagram
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)
@@ -1511,7 +1519,7 @@ class TestGenerateDiagramTool:
             Decision -->|no| Retry[Try again]
         """
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)
@@ -1581,7 +1589,7 @@ class TestGenerateDiagramTool:
     ):
         from mcp_bildsprache.server import generate_diagram
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)
@@ -1650,7 +1658,7 @@ class TestGenerateDiagramTool:
     ):
         from mcp_bildsprache.server import generate_diagram
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)
@@ -1673,7 +1681,7 @@ class TestGenerateDiagramTool:
     ):
         from mcp_bildsprache.server import generate_diagram
 
-        with patch("mcp_bildsprache.server.settings") as s, \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT) as s, \
              patch("mcp_bildsprache.storage.settings") as ss:
             s.enable_hosting = True
             ss.image_storage_path = str(tmp_path)

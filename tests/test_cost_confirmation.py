@@ -14,7 +14,6 @@ the paid provider call. Per the defensive-elicit contract:
 from __future__ import annotations
 
 import io
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -24,6 +23,9 @@ from fastmcp.exceptions import ToolError
 from PIL import Image
 
 from mcp_bildsprache.types import ProviderResult
+
+# Explicit inline-wait budget; see INLINE_WAIT in test_integration.py for why.
+INLINE_WAIT = 30
 
 
 def _d(result):
@@ -104,7 +106,7 @@ class TestGenerateImageCostConfirmation:
         """ctx=None (direct call) must generate exactly as before."""
         from mcp_bildsprache.server import generate_image
 
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -121,7 +123,7 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(RuntimeError("elicitation not supported"))
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -138,7 +140,7 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_accept(True))
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -154,7 +156,7 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_decline())
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -173,7 +175,7 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_cancel())
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -189,7 +191,7 @@ class TestGenerateImageCostConfirmation:
         from mcp_bildsprache.server import generate_image
 
         ctx = _FakeCtx(_accept(False))
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -210,19 +212,22 @@ class _HangingCtx(_FakeCtx):
 
 
 @pytest.mark.anyio
-async def test_hanging_elicit_is_bounded_and_dispatches(tmp_path: Path, mock_provider):
+async def test_hanging_elicit_is_bounded_and_dispatches(tmp_path: Path, mock_provider, monkeypatch):
+    from mcp_bildsprache import server
     from mcp_bildsprache.server import generate_image
 
+    # Shrink the real 5s bound so the test proves the bound fires without
+    # sleeping through it. The fail_after below only turns a regression (an
+    # unbounded elicit hangs forever) into a failure instead of a stuck run.
+    monkeypatch.setattr(server, "_ELICIT_TIMEOUT_S", 0.05)
     ctx = _HangingCtx(None)
-    t0 = time.monotonic()
-    with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+    with anyio.fail_after(60), patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
          patch("mcp_bildsprache.storage.settings") as ss:
         ss.image_storage_path = str(tmp_path)
         ss.image_domain = "https://img.cdit-works.de"
 
         result = _d(await generate_image(prompt="x", dimensions="512x512", ctx=ctx))
 
-    assert time.monotonic() - t0 < 7
     assert ctx.response_type is bool
     assert result.get("cancelled") is not True
     assert "hosted_url" in result
@@ -240,7 +245,7 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(RuntimeError("elicitation not supported"))
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -257,7 +262,7 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_decline())
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -276,7 +281,7 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_cancel())
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
@@ -291,7 +296,7 @@ class TestGenerateDiagramCostConfirmation:
         from mcp_bildsprache.server import generate_diagram
 
         ctx = _FakeCtx(_accept(True))
-        with patch("mcp_bildsprache.server.settings", openai_image_model="gpt-image-2"), \
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT, openai_image_model="gpt-image-2"), \
              patch("mcp_bildsprache.storage.settings") as ss:
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
