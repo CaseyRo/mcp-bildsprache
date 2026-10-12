@@ -149,6 +149,30 @@ def store_raw_image(
     return f"{domain}/{relative_raw}"
 
 
+def resolve_stored_image(ref: str) -> Path | None:
+    """Map a hosted URL or a storage-relative path to the stored file.
+
+    Accepts ``https://<image_domain>/casey/foo.webp`` or ``casey/foo.webp``
+    (the ``path`` that ``list_recent_generations`` returns). Returns ``None``
+    when ``ref`` points elsewhere or the file doesn't exist; never resolves
+    outside ``image_storage_path``.
+    """
+    domain = settings.image_domain.rstrip("/")
+    if ref.startswith(domain + "/"):
+        relative = ref[len(domain) + 1:]
+    elif "://" in ref:
+        return None
+    else:
+        relative = ref.lstrip("/")
+    relative = relative.split("?", 1)[0].split("#", 1)[0]
+
+    base = Path(settings.image_storage_path).resolve()
+    candidate = (base / relative).resolve()
+    if not candidate.is_relative_to(base) or not candidate.is_file():
+        return None
+    return candidate
+
+
 def _build_sidecar(
     prompt: str,
     width: int,

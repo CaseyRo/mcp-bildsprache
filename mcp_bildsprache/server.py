@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import time
 from typing import Annotated, Any, Callable, Literal
@@ -11,6 +12,7 @@ import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
+from PIL import Image as PILImage
 from pydantic import BeforeValidator
 from mcp.types import Icon, ToolAnnotations
 
@@ -22,6 +24,7 @@ from mcp_bildsprache.auth import (
     build_cf_access_verifier,
     create_auth,
 )
+from mcp_bildsprache.brands import normalize_brand
 from mcp_bildsprache.config import settings
 from mcp_bildsprache.identity import (
     get_loaded_packs,
@@ -41,19 +44,34 @@ from mcp_bildsprache.presets import (
     get_preset,
     route_model,
 )
+from mcp_bildsprache.providers.bfl import (
+    FLUX3_MODEL,
+    Region,
+    compose_edit_prompt,
+    edit_flux3,
+    estimate_usd,
+)
 from mcp_bildsprache.providers.gemini import generate_gemini
 from mcp_bildsprache.providers.openai import IMAGE_MODELS as OPENAI_MODELS
 from mcp_bildsprache.providers.openai import check_options as check_openai_options
 from mcp_bildsprache.providers.openai import generate_openai
-from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
+from mcp_bildsprache.storage import (
+    StorageError,
+    resolve_stored_image,
+    store_image,
+    store_raw_image,
+)
 from mcp_bildsprache.attribution import (
     build_attribution,
     estimate_cost_eur,
     format_legacy_cost_estimate,
     get_contract_state,
+    usd_to_eur,
     validate_shared_contract,
 )
 from mcp_bildsprache.models import (
+    EditImageResult,
+    EditRegion,
     GenerateDiagramResult,
     GenerateImageResult,
     GeneratePromptResult,
@@ -697,6 +715,128 @@ async def _render_diagram_job(
     return result
 
 
+async def _render_edit_job(
+    *,
+    job_id: str,
+    edit_prompt: str,
+    instruction: str,
+    source: str | bytes,
+    source_url: str,
+    w: int | None,
+    h: int | None,
+    context: str | None,
+    params: dict[str, Any],
+    est_cost: float | None,
+) -> dict[str, Any]:
+    """Run a FLUX 3 edit, store it, and return the result dict.
+
+    Detached-task sibling of :func:`_render_image_job`: same ledger + registry
+    contract. ``w``/``h`` are None only for an external source with no
+    ``dimensions``; then the edit keeps the provider's output size.
+    """
+    registry = _jobs.get_registry()
+    latency_ms = _render_clock()
+
+    def _fail(e: Exception, model: str, cost: float | None) -> None:
+        outcome, category = _classify_generation_error(e)
+        _record_generation_attempt(
+            request_id=job_id,
+            outcome=outcome,
+            model=model,
+            provider="bfl",
+            brand=context,
+            width=w,
+            height=h,
+            latency_ms=latency_ms(),
+            error_category=category,
+            error_message=str(e),
+            cost_estimate_eur=cost,
+        )
+        registry.mark_error(job_id, error=str(e), error_category=category)
+
+    try:
+        provider_result = await edit_flux3(edit_prompt, source, width=w, height=h)
+    except Exception as e:
+        logger.warning("FLUX 3 edit failed: %s", e)
+        _fail(e, FLUX3_MODEL, est_cost)
+        raise
+
+    out_w, out_h = w, h
+    if out_w is None or out_h is None:
+        out_w, out_h = await asyncio.to_thread(_image_size, provider_result.image_data)
+
+    attribution = build_attribution(
+        provider_result=provider_result,
+        prompt_anchor=instruction,
+        effective_prompt=edit_prompt,
+        brand_context=context,
+        sources=[{"type": "reference_image", "href": source_url, "title": "edited image"}],
+        params={**params, "dimensions": f"{out_w}x{out_h}"},
+    )
+    cost_eur = (attribution.get("cost", {}) or {}).get("amount_eur")
+
+    try:
+        processed_bytes = await asyncio.to_thread(
+            process_image,
+            provider_result=provider_result,
+            target_width=out_w,
+            target_height=out_h,
+            prompt=edit_prompt,
+            brand_context=context,
+        )
+        hosted_url = await asyncio.to_thread(
+            store_image,
+            image_data=processed_bytes,
+            prompt=f"edit {instruction}",
+            width=out_w,
+            height=out_h,
+            model=provider_result.model,
+            cost_estimate=provider_result.cost_estimate,
+            brand_context=context,
+            attribution=attribution,
+        )
+    except Exception as e:
+        _fail(e, provider_result.model, cost_eur)
+        raise
+
+    result: dict[str, Any] = {
+        "hosted_url": hosted_url,
+        "source_image": source_url,
+        "model": provider_result.model,
+        "cost_estimate": format_legacy_cost_estimate(attribution),
+        "brand_context": context,
+        "dimensions": f"{out_w}x{out_h}",
+        "response_mode": "url",
+        "ai_attribution": attribution,
+    }
+    logger.info(
+        "event=image_edited provider=bfl model=%s brand_context=%s amount_eur=%.6f",
+        provider_result.model,
+        context or "none",
+        float(cost_eur or 0.0),
+    )
+    _record_generation_attempt(
+        request_id=job_id,
+        outcome="success",
+        model=provider_result.model,
+        provider="bfl",
+        brand=context,
+        width=out_w,
+        height=out_h,
+        latency_ms=latency_ms(),
+        hosted_url=hosted_url,
+        cost_estimate_eur=cost_eur,
+        delivery="delivered",
+    )
+    registry.mark_done(job_id, result)
+    return result
+
+
+def _image_size(data: bytes) -> tuple[int, int]:
+    with PILImage.open(io.BytesIO(data)) as img:
+        return img.size
+
+
 async def _dispatch_and_maybe_wait(
     *,
     job_id: str,
@@ -876,6 +1016,10 @@ Choosing a tool:
   Default provider: Gemini Nano Banana Pro (`gemini-3-pro-image-preview` —
   top editing/control + 4K brand graphics, best in-image text). WRITES an
   artifact and incurs paid-API cost.
+- `edit_image` — change one thing in an existing image (a hosted_url, its
+  storage path, or any https URL) and keep the rest, via FLUX 3. Optional
+  bounding-box `regions` for precise control. Stores the edit as a NEW image;
+  the original is untouched. Incurs paid-API cost.
 - `generate_prompt` — engineer the brand-injected prompt WITHOUT calling a
   provider or spending money. Use to preview or for manual generation.
 - `list_models` — active vs. disabled providers, their costs, and which
@@ -895,9 +1039,10 @@ Banana Pro (OpenAI available via model_hint='openai').
 
 No-fallback policy: per an explicit user directive, raster generation has NO
 silent provider fallback — if OpenAI fails the error propagates rather than
-quietly handing off to Gemini. FLUX and Recraft are temporarily disabled at
-the dispatcher; hinting at them returns a PROVIDER_TEMPORARILY_DISABLED error
-naming the active replacement.
+quietly handing off to Gemini. FLUX and Recraft are not dispatched by
+generate_image / generate_diagram; hinting at them returns a
+PROVIDER_TEMPORARILY_DISABLED error naming the active replacement. FLUX 3 is
+used by edit_image only.
 
 Reference data (presets, palette, platform sizes, model capabilities) is also
 available as cacheable resources under the `bildsprache://` URI scheme.
@@ -1434,6 +1579,154 @@ async def generate_diagram(
 
 @mcp.tool(
     annotations=ToolAnnotations(
+        title="Edit Image",
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
+    )
+)
+@_with_sync_wait_doc
+async def edit_image(
+    image: str,
+    instruction: str,
+    regions: list[EditRegion] | None = None,
+    context: BrandContext | None = None,
+    dimensions: str | None = None,
+    background: bool = False,
+    ctx: Context | None = None,
+) -> EditImageResult:
+    """[image] Edit an existing image with FLUX 3: change one thing, keep the rest.
+
+    Use this instead of re-generating when an image is nearly right ("make the
+    mug green", "remove the lamp", "move the dog to the left"). FLUX 3 changes
+    what the instruction names and leaves the other pixels as they were. The
+    original is never overwritten: the edit is stored as a new image.
+
+    Response shape is the same UNION as ``generate_image``: the hosted edit
+    inline when it finishes within {sync_wait}s, otherwise ``{job_id, status:
+    "pending", poll_with: "get_image_result"}`` while the edit keeps running.
+
+    Args:
+        image: The image to edit. A Bildsprache ``hosted_url`` or its storage
+            ``path`` (e.g. ``casey/foo-1600x900.webp`` from
+            ``list_recent_generations``), or any public https URL.
+        instruction: What to change, in plain words. Name the element precisely
+            enough that only one thing matches. Text to render goes in quotes.
+        regions: Optional bounding boxes for precise control, on a 0-1000 grid
+            over the image (``[left, top, right, bottom]``, origin top-left).
+            Tag them in the instruction as ``<id>``. ``kind``: ``edit``/``add``
+            render something new in the box, ``keep`` pins an element, ``move``
+            moves the element in ``box`` to ``to``. Very small boxes (a few
+            percent of the image) often fail.
+        context: Brand directory to store the edit under. Defaults to the
+            source image's brand; no brand preset is injected (the edit keeps
+            the source's look).
+        dimensions: Output size as ``WxH``. Defaults to the source size.
+        background: Return the job handle immediately instead of waiting.
+
+    Cost: $0.048 per edit up to ~1 MP, $0.10 up to ~4 MP, $0.61 above.
+    """
+    if not settings.bfl_api_key.get_secret_value():
+        raise ToolError("PROVIDER_UNAVAILABLE: edit_image needs BFL_API_KEY (FLUX 3).")
+    if not instruction.strip():
+        raise ToolError("INVALID_INPUT: `instruction` is empty.")
+    if regions and len({r.id for r in regions}) != len(regions):
+        raise ToolError("INVALID_INPUT: region ids must be unique.")
+
+    local = resolve_stored_image(image)
+    source: str | bytes
+    if local is not None:
+        source = await asyncio.to_thread(local.read_bytes)
+        relative = local.relative_to(Path(settings.image_storage_path).resolve())
+        source_url = f"{settings.image_domain.rstrip('/')}/{relative.as_posix()}"
+        if context is None and len(relative.parts) > 1 and relative.parts[0] != "gen":
+            context = normalize_brand(relative.parts[0]) or relative.parts[0]
+    elif image.startswith("https://"):
+        source = source_url = image
+    else:
+        raise ToolError(
+            f"INVALID_IMAGE: {image!r} is not a stored Bildsprache image or an https URL."
+        )
+
+    if dimensions:
+        try:
+            d_parts = dimensions.lower().replace(" ", "").split("x")
+            w, h = int(d_parts[0]), int(d_parts[1])
+        except (ValueError, IndexError):
+            raise ToolError(f"INVALID_DIMENSIONS: {dimensions!r}. Use 'WxH', e.g. '1600x900'.")
+        if w <= 0 or h <= 0:
+            raise ToolError(f"INVALID_DIMENSIONS: {dimensions!r} must be positive.")
+        size: tuple[int, int] | None = (w, h)
+    elif isinstance(source, bytes):
+        try:
+            size = await asyncio.to_thread(_image_size, source)
+        except Exception as e:
+            raise ToolError(f"INVALID_IMAGE: could not read {image!r}: {e}") from e
+    else:
+        size = None
+
+    flux_regions = [
+        Region(
+            id=r.id,
+            box=tuple(r.box),
+            desc=r.desc,
+            kind=r.kind,
+            to=tuple(r.to) if r.to else None,
+        )
+        for r in regions or []
+    ]
+    edit_prompt = compose_edit_prompt(instruction, flux_regions)
+
+    est_cost = usd_to_eur(estimate_usd(*size)) if size else usd_to_eur(estimate_usd(1024, 1024))
+    if not await _confirm_cost(
+        ctx, what="Editing this image", estimated_cost_eur=est_cost, provider="bfl"
+    ):
+        return EditImageResult(**{
+            "cancelled": True,
+            "response_mode": "cancelled",
+            "source_image": source_url,
+            "brand_context": context,
+            "dimensions": f"{size[0]}x{size[1]}" if size else None,
+            "model": FLUX3_MODEL,
+            "estimated_cost_eur": est_cost,
+        })
+
+    job_id = _ledger.new_request_id()
+    sync_wait = 0 if background else max(0, int(settings.sync_wait_seconds))
+    params = {
+        "operation": "edit",
+        "regions": [r.model_dump(exclude_none=True) for r in regions or []],
+    }
+
+    def _coro_factory():
+        return _render_edit_job(
+            job_id=job_id,
+            edit_prompt=edit_prompt,
+            instruction=instruction,
+            source=source,
+            source_url=source_url,
+            w=size[0] if size else None,
+            h=size[1] if size else None,
+            context=context,
+            params=params,
+            est_cost=est_cost,
+        )
+
+    dispatched = await _dispatch_and_maybe_wait(
+        job_id=job_id,
+        coro_factory=_coro_factory,
+        model=FLUX3_MODEL,
+        brand=context,
+        dimensions=f"{size[0]}x{size[1]}" if size else "source",
+        sync_wait_seconds=sync_wait,
+    )
+    dispatched.setdefault("source_image", source_url)
+    return EditImageResult(**dispatched)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
         title="Engineer Image Prompt",
         read_only_hint=True,
         idempotent_hint=True,
@@ -1546,6 +1839,21 @@ async def list_models() -> ModelsResult:
                 "the fast raster fallback when OpenAI is unavailable."
             ),
             "cost": "~$0.067/image (flash) – ~$0.24/image (Pro, 4K)",
+            "status": "available",
+        })
+
+    if settings.bfl_api_key.get_secret_value():
+        available.append({
+            "id": "bfl",
+            "name": "FLUX 3 Image",
+            "models": [FLUX3_MODEL],
+            "default": FLUX3_MODEL,
+            "best_for": (
+                "edit_image only: change one element of an existing image and "
+                "leave the rest pixel-stable, optionally with bounding-box regions. "
+                "Not used by generate_image."
+            ),
+            "cost": "$0.048 up to ~1 MP, $0.10 up to ~4 MP, $0.61 at 4K (per edit)",
             "status": "available",
         })
 

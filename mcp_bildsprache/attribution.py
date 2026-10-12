@@ -362,6 +362,14 @@ def estimate_cost_eur(
     return result.amount_eur
 
 
+def usd_to_eur(usd: float) -> float | None:
+    """Convert a listed USD price at the cost table's FX snapshot."""
+    try:
+        return round(usd * float(_get_cost_table()["fx"]["usd_eur"]), 6)
+    except Exception:  # pragma: no cover — table load is validated at startup
+        return None
+
+
 def format_legacy_cost_estimate(payload: dict[str, Any]) -> str:
     """Derive the legacy 'cost_estimate' display string from the new cost block.
 

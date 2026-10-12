@@ -14,9 +14,9 @@ Unset optional fields now go out as explicit ``null``.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class GenerateImageResult(BaseModel):
@@ -118,6 +118,80 @@ class GenerateDiagramResult(BaseModel):
     estimated_cost_eur: Optional[float] = Field(
         default=None,
         description="Estimated EUR cost surfaced in the cost-confirmation prompt (only present when the user cancelled).",
+    )
+
+
+def _check_box(box: list[int]) -> list[int]:
+    if len(box) != 4 or not all(0 <= v <= 1000 for v in box):
+        raise ValueError("box must be [left, top, right, bottom] on the 0-1000 grid")
+    left, top, right, bottom = box
+    if left >= right or top >= bottom:
+        raise ValueError("box needs left < right and top < bottom")
+    return box
+
+
+class EditRegion(BaseModel):
+    """One bounding box for :func:`edit_image`, on a 0-1000 grid over the image."""
+
+    id: str = Field(
+        pattern=r"^[a-z][a-z0-9_]{0,31}$",
+        description="Short tag, e.g. 'mug_1'. Refer to it in the instruction as <mug_1>.",
+    )
+    box: list[int] = Field(
+        description="[left, top, right, bottom] on a 0-1000 grid (0,0 = top-left, 1000,1000 = bottom-right)."
+    )
+    desc: str = Field(description="What is (or should be) in the box, e.g. 'a white ceramic mug'.")
+    kind: Literal["edit", "keep", "move", "add"] = Field(
+        default="edit",
+        description="edit/add: render something new in the box; keep: leave this element exactly as is; "
+        "move: move the element in `box` to `to`.",
+    )
+    to: Optional[list[int]] = Field(default=None, description="Target box for kind='move'.")
+
+    @field_validator("box")
+    @classmethod
+    def _box(cls, v: list[int]) -> list[int]:
+        return _check_box(v)
+
+    @field_validator("to")
+    @classmethod
+    def _to(cls, v: list[int] | None) -> list[int] | None:
+        return None if v is None else _check_box(v)
+
+    @model_validator(mode="after")
+    def _move_needs_to(self) -> "EditRegion":
+        if (self.kind == "move") != (self.to is not None):
+            raise ValueError("`to` is required for kind='move' and only allowed there")
+        return self
+
+
+class EditImageResult(BaseModel):
+    """Structured result of :func:`edit_image`.
+
+    Same union as :class:`GenerateImageResult`: the hosted edit inline, or a
+    ``{job_id, status: "pending"}`` handle to poll with ``get_image_result``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    hosted_url: Optional[str] = Field(
+        default=None, description="Public URL of the edited WebP, or omitted on a pending job handle."
+    )
+    source_image: Optional[str] = Field(default=None, description="The image that was edited.")
+    model: Optional[str] = Field(default=None, description="Always 'flux-3-image'.")
+    cost_estimate: Optional[str] = Field(default=None, description="Human display cost (e.g. '€0.0442').")
+    brand_context: Optional[str] = Field(default=None, description="Brand directory the edit is stored under.")
+    dimensions: Optional[str] = Field(default=None, description="Final image dimensions as 'WxH'.")
+    response_mode: Optional[str] = Field(default=None, description="Always 'url' on success.")
+    ai_attribution: Optional[dict[str, Any]] = Field(
+        default=None, description="ai_attribution v1 payload; the source image is listed under sources."
+    )
+    cancelled: Optional[bool] = Field(
+        default=None,
+        description="True when the user declined the cost-confirmation prompt; nothing was rendered.",
+    )
+    estimated_cost_eur: Optional[float] = Field(
+        default=None, description="Estimated EUR cost (only present when the user cancelled)."
     )
 
 

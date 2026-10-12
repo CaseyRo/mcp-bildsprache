@@ -318,8 +318,8 @@ DISABLED_PROVIDERS: tuple[dict[str, str], ...] = (
     {
         "provider": "bfl",
         "reason": (
-            "Disabled at dispatcher per the May 2026 brand-collapse change. "
-            "Module remains in-tree at providers/bfl.py for re-enable."
+            "Not dispatched by generate_image / generate_diagram since the May "
+            "2026 brand collapse. FLUX 3 powers edit_image only."
         ),
     },
     {

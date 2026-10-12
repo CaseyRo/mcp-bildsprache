@@ -15,7 +15,7 @@ from fastmcp import Client
 from mcp_bildsprache.server import mcp
 
 EXPECTED_TOOLS = {
-    "generate_image", "generate_diagram", "generate_prompt", "list_models",
+    "generate_image", "generate_diagram", "edit_image", "generate_prompt", "list_models",
     "list_recent_generations", "generation_stats", "get_image_result",
     "get_visual_presets",
 }

@@ -580,15 +580,20 @@ class TestOtherTools:
             from pydantic import SecretStr
             s.openai_api_key = SecretStr("fake-key")
             s.gemini_api_key = SecretStr("fake-key")
+            s.bfl_api_key = SecretStr("")
             s.openai_image_model = "gpt-image-2"
 
             result = _d(await list_models())
+            # FLUX 3 shows up (for edit_image) only once its key is set.
+            s.bfl_api_key = SecretStr("fake-key")
+            with_bfl = _d(await list_models())
 
         assert "providers" in result
         providers = result["providers"]
         # Active providers post-collapse: openai + gemini.
         ids = {m["id"] for m in providers}
         assert ids == {"openai", "gemini"}
+        assert {m["id"] for m in with_bfl["providers"]} == {"openai", "gemini", "bfl"}
 
         # Disabled providers reported separately.
         assert "disabled_providers" in result
@@ -1694,3 +1699,99 @@ class TestGenerateDiagramTool:
         assert attr["schema_version"]
         assert attr["provider"]
         assert attr["model"]
+
+
+class TestEditImage:
+    """edit_image end to end: source resolution → FLUX 3 (mocked) → stored edit."""
+
+    @pytest.fixture
+    def env(self, tmp_path: Path, monkeypatch):
+        from pydantic import SecretStr
+
+        from mcp_bildsprache.config import settings
+
+        monkeypatch.setattr(settings, "bfl_api_key", SecretStr("bfl-test"))
+        monkeypatch.setattr(settings, "image_storage_path", str(tmp_path))
+        monkeypatch.setattr(settings, "image_domain", "https://img.cdit-works.de")
+        monkeypatch.setattr(settings, "sync_wait_seconds", INLINE_WAIT)
+        monkeypatch.setattr(settings, "ledger_path", str(tmp_path / "ledger.jsonl"))
+        (tmp_path / "casey").mkdir()
+        buf = io.BytesIO()
+        Image.new("RGB", (1600, 900), color=(10, 20, 30)).save(buf, format="WEBP")
+        (tmp_path / "casey" / "kitchen-1600x900.webp").write_bytes(buf.getvalue())
+
+        mock = AsyncMock(return_value=_fake_provider_result(model="flux-3-image"))
+        with patch("mcp_bildsprache.server.edit_flux3", mock):
+            yield tmp_path, mock
+
+    async def test_edits_stored_image_and_keeps_source_size(self, env):
+        from mcp_bildsprache.models import EditRegion
+        from mcp_bildsprache.server import edit_image
+
+        tmp_path, mock = env
+        result = _d(await edit_image(
+            image="https://img.cdit-works.de/casey/kitchen-1600x900.webp",
+            instruction="Make <mug_1> green",
+            regions=[EditRegion(id="mug_1", box=[100, 200, 300, 400], desc="a green mug")],
+        ))
+
+        prompt, source = mock.await_args.args
+        assert prompt.startswith("In <ref_image_0>, make <mug_1> green")
+        assert '"tgt_bbox": [200, 100, 400, 300]' in prompt
+        assert source == (tmp_path / "casey" / "kitchen-1600x900.webp").read_bytes()
+        assert mock.await_args.kwargs == {"width": 1600, "height": 900}
+
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/casey/edit-make-mug-1-green")
+        assert result["dimensions"] == "1600x900"
+        assert result["brand_context"] == "casey"
+        assert result["model"] == "flux-3-image"
+        assert result["source_image"] == "https://img.cdit-works.de/casey/kitchen-1600x900.webp"
+        attribution = result["ai_attribution"]
+        assert attribution["provider"] == "bfl"
+        assert attribution["sources"][0]["href"] == result["source_image"]
+        assert attribution["params"]["regions"][0]["id"] == "mug_1"
+        stored = tmp_path / result["hosted_url"].removeprefix("https://img.cdit-works.de/")
+        with Image.open(stored) as img:
+            assert img.size == (1600, 900)
+
+        ledger = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text().splitlines()]
+        assert ledger[-1]["outcome"] == "success"
+        assert ledger[-1]["provider"] == "bfl"
+
+    async def test_external_url_is_passed_through_at_output_size(self, env):
+        from mcp_bildsprache.server import edit_image
+
+        _, mock = env
+        result = _d(await edit_image(image="https://example.com/photo.jpg", instruction="remove the lamp"))
+        assert mock.await_args.args[1] == "https://example.com/photo.jpg"
+        assert mock.await_args.kwargs == {"width": None, "height": None}
+        assert result["dimensions"] == "1024x1024"  # the provider output size
+        assert result["hosted_url"].startswith("https://img.cdit-works.de/gen/")
+
+    async def test_rejects_non_https_and_unknown_paths(self, env):
+        from mcp_bildsprache.server import edit_image
+
+        for image in ("http://example.com/a.jpg", "casey/missing.webp", "../etc/passwd"):
+            with pytest.raises(ToolError, match="INVALID_IMAGE"):
+                await edit_image(image=image, instruction="x")
+
+    async def test_needs_bfl_key(self, env, monkeypatch):
+        from pydantic import SecretStr
+
+        from mcp_bildsprache.config import settings
+        from mcp_bildsprache.server import edit_image
+
+        monkeypatch.setattr(settings, "bfl_api_key", SecretStr(""))
+        with pytest.raises(ToolError, match="BFL_API_KEY"):
+            await edit_image(image="casey/kitchen-1600x900.webp", instruction="x")
+
+    async def test_provider_failure_is_a_tool_error_and_ledgered(self, env):
+        from mcp_bildsprache.server import edit_image
+
+        tmp_path, mock = env
+        mock.side_effect = RuntimeError("bfl: Content Moderated")
+        with pytest.raises(ToolError, match="Content Moderated"):
+            await edit_image(image="casey/kitchen-1600x900.webp", instruction="x")
+        last = json.loads((tmp_path / "ledger.jsonl").read_text().splitlines()[-1])
+        assert last["outcome"] != "success"
+        assert last["model"] == "flux-3-image"
