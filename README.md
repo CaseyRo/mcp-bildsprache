@@ -1,12 +1,12 @@
 # mcp-bildsprache
 
-An MCP server for brand-aware image generation. It takes a prompt and a brand context, injects that brand's visual preset (palette, mood, composition rules), renders the image with OpenAI or Google Gemini, then resizes, converts to WebP, embeds provenance metadata, and stores the result under a hosted URL. It also renders flow, sequence and state diagrams from free text or Mermaid. It is built for a small set of brands owned by one studio, so the presets are specific to them; the pipeline, job handling and gallery are reusable if you swap in your own presets. Built on [FastMCP](https://gofastmcp.com) 4.
+An MCP server for brand-aware image generation. It takes a prompt and a brand context, injects that brand's visual preset (palette, mood, composition rules), renders the image with OpenAI or Google Gemini, then resizes, converts to WebP, embeds provenance metadata, and stores the result under a hosted URL. It also renders flow, sequence and state diagrams from free text or Mermaid, and edits existing images with FLUX 3. It is built for a small set of brands owned by one studio, so the presets are specific to them; the pipeline, job handling and gallery are reusable if you swap in your own presets. Built on [FastMCP](https://gofastmcp.com) 4.
 
 ## Requirements
 
 - Python 3.11 or newer
 - FastMCP 4 (`fastmcp>=4.0.10,<5.0.0`, installed as a dependency)
-- An OpenAI API key (raster images) and a Google Gemini API key (diagrams). A missing key disables that provider; the server still starts.
+- An OpenAI API key (raster images) and a Google Gemini API key (diagrams). A Black Forest Labs key is optional and enables `edit_image`. A missing key disables that provider; the server still starts.
 
 ## Install and run
 
@@ -38,6 +38,7 @@ docker compose up -d --build
 | --- | --- | --- |
 | `OPENAI_API_KEY` | empty | OpenAI key for raster images |
 | `GEMINI_API_KEY` | empty | Gemini key for diagrams, and raster by explicit hint |
+| `BFL_API_KEY` | empty | Black Forest Labs key for `edit_image` (FLUX 3) |
 | `OPENAI_IMAGE_MODEL` | empty | Force one OpenAI model; empty lets the server choose per call |
 | `TRANSPORT` | `stdio` | `stdio` or `http` (the Docker image uses `http`) |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address and port |
@@ -65,6 +66,7 @@ Stdio mode has no auth. HTTP mode refuses to start without `MCP_BILDSPRACHE_API_
 | --- | --- |
 | `generate_image` | Render an image with the brand preset for `context`, sized for `platform` or explicit `dimensions`. Optional `model`, `quality`, `transparent`, `register`, `reference_images`, `raw`, `background`. Returns a result or a job handle. |
 | `generate_diagram` | Render a flow, sequence or state diagram from `prompt` or `mermaid` source. Gemini by default, OpenAI with `model_hint="openai"`. Returns a result or a job handle. |
+| `edit_image` | Change one thing in an existing image and keep the rest, with FLUX 3. Takes a stored image (`hosted_url` or storage path) or any https URL, an `instruction`, and optional bounding-box `regions` on a 0-1000 grid. Stores the edit as a new image; returns a result or a job handle. |
 | `get_image_result` | Fetch or long-poll the result of a pending render by `job_id`. Reads local state only. |
 | `generate_prompt` | Return the engineered prompt without calling a provider |
 | `list_models` | Active providers and models, disabled providers, diagram support, whether reference packs are loaded |
@@ -74,7 +76,7 @@ Stdio mode has no auth. HTTP mode refuses to start without `MCP_BILDSPRACHE_API_
 
 Resources: `bildsprache://presets`, `bildsprache://palette/casey`, `bildsprache://platforms`, `bildsprache://models`, `bildsprache://status`. Prompts: `brand_image_brief`, `mermaid_to_diagram`.
 
-Providers: OpenAI (gpt-image-2 and the gpt-image-2.5 models) for raster, Gemini (Nano Banana Pro) for diagrams. There is no automatic fallback between providers; a provider error fails the job. A failure within the inline wait surfaces as an MCP tool error; a failure after that is reported by `get_image_result` as `status: error`.
+Providers: OpenAI (gpt-image-2 and the gpt-image-2.5 models) for raster, Gemini (Nano Banana Pro) for diagrams, FLUX 3 for edits. There is no automatic fallback between providers; a provider error fails the job. A failure within the inline wait surfaces as an MCP tool error; a failure after that is reported by `get_image_result` as `status: error`.
 
 ### Long renders: job and poll
 

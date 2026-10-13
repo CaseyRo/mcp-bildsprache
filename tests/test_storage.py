@@ -7,7 +7,12 @@ from unittest.mock import patch
 import pytest
 
 from mcp_bildsprache.slugs import make_collision_suffix, make_slug
-from mcp_bildsprache.storage import StorageError, store_image, store_raw_image
+from mcp_bildsprache.storage import (
+    StorageError,
+    resolve_stored_image,
+    store_image,
+    store_raw_image,
+)
 
 
 class TestSlugGeneration:
@@ -255,3 +260,31 @@ class TestStoreRawImage:
         assert raw_url.endswith("-raw.bin")
         raw_files = list(tmp_path.rglob("*-raw.bin"))
         assert len(raw_files) == 1
+
+
+class TestResolveStoredImage:
+    @pytest.fixture(autouse=True)
+    def _storage(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        from mcp_bildsprache.config import settings
+
+        monkeypatch.setattr(settings, "image_storage_path", str(tmp_path / "images"))
+        monkeypatch.setattr(settings, "image_domain", "https://img.cdit-works.de")
+        (tmp_path / "images" / "casey").mkdir(parents=True)
+        (tmp_path / "images" / "casey" / "a-100x100.webp").write_bytes(b"img")
+        (tmp_path / "secret.txt").write_text("no")
+        return tmp_path
+
+    def test_hosted_url(self, _storage: Path):
+        found = resolve_stored_image("https://img.cdit-works.de/casey/a-100x100.webp?v=1")
+        assert found == (_storage / "images" / "casey" / "a-100x100.webp").resolve()
+
+    def test_relative_path(self, _storage: Path):
+        assert resolve_stored_image("casey/a-100x100.webp") is not None
+
+    def test_other_domain_and_missing_file(self):
+        assert resolve_stored_image("https://example.com/casey/a-100x100.webp") is None
+        assert resolve_stored_image("casey/missing.webp") is None
+
+    def test_never_escapes_storage(self):
+        assert resolve_stored_image("../secret.txt") is None
+        assert resolve_stored_image("https://img.cdit-works.de/../secret.txt") is None

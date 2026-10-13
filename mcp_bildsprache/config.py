@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # generate_diagram).
     gemini_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
+    # Black Forest Labs. Optional: only edit_image (FLUX 3) needs it.
+    bfl_api_key: SecretStr = SecretStr("")
 
     # OpenAI image model. Empty (default) = generate_image picks per call:
     # gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise (A/B
