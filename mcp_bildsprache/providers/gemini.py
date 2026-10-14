@@ -112,6 +112,10 @@ def _image_size_for(width: int, height: int, model: str = "") -> str:
         return "4K"
     return "2K"
 
+# Nano Banana Pro and Nano Banana 2 take up to 14 input images per prompt
+# (consistent likeness for up to 5 people). Extras are dropped from the end.
+MAX_REFERENCE_IMAGES = 14
+
 # Mapping of Pillow "format" strings to the mime types Gemini's inlineData
 # parts accept. Anything outside this set → ValueError.
 _PILLOW_FORMAT_TO_MIME = {
@@ -170,6 +174,13 @@ async def generate_gemini(
 
     # Probe mime types up-front so we fail fast with a clear error before
     # any HTTP call.
+    if reference_images and len(reference_images) > MAX_REFERENCE_IMAGES:
+        logger.warning(
+            "gemini: %d reference images, sending the first %d",
+            len(reference_images),
+            MAX_REFERENCE_IMAGES,
+        )
+        reference_images = reference_images[:MAX_REFERENCE_IMAGES]
     if reference_images:
         probed = [(_probe_mime(i, b), b) for i, b in enumerate(reference_images)]
     else:

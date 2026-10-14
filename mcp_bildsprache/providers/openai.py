@@ -37,6 +37,7 @@ from typing import Any
 import httpx
 
 from mcp_bildsprache.config import settings
+from mcp_bildsprache.providers.gemini import _probe_mime
 from mcp_bildsprache.types import ProviderResult
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,13 @@ _MAX_PIXELS = 8_294_400
 # Models callers may pick. Size limits are the same for all three (docs,
 # 2026-09-28); the 2.5 models add xhigh/max quality and transparent backgrounds.
 IMAGE_MODELS = ("gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
+
+# /images/edits takes at most 16 input images on every GPT image model (API
+# reference, 2026-10-14). Extra refs are dropped from the end, so manifest
+# order decides what survives (the person slot comes first).
+MAX_REFERENCE_IMAGES = 16
+
+_MIME_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 _QUALITIES = ("low", "medium", "high", "auto")
 _QUALITIES_25 = ("low", "medium", "high", "xhigh", "max", "auto")
 
@@ -222,8 +230,9 @@ async def generate_openai(
         width / height: Caller-requested pixel dimensions. Snapped to the
             nearest OpenAI-compliant size for the API call; the existing
             pipeline trims to the exact requested size post-download.
-        reference_images: Not supported in v1 (OpenAI's edit endpoint is
-            tracked as a follow-up change). Silently ignored with a log.
+        reference_images: Sent to /images/edits as ``image[]`` uploads with
+            their real mime type, at most MAX_REFERENCE_IMAGES (extras are
+            dropped with a WARN).
         model: One of IMAGE_MODELS; None → OPENAI_IMAGE_MODEL.
         quality: "low" | "medium" | "high" | "auto" (+ "xhigh" | "max" on
             the 2.5 models). Default "medium".
@@ -270,8 +279,17 @@ async def generate_openai(
         # Don't set Content-Type — httpx sets the multipart boundary.
     }
 
+    if reference_images and len(reference_images) > MAX_REFERENCE_IMAGES:
+        logger.warning(
+            "openai: %d reference images, sending the first %d",
+            len(reference_images),
+            MAX_REFERENCE_IMAGES,
+        )
+        reference_images = reference_images[:MAX_REFERENCE_IMAGES]
+    probed = [(_probe_mime(i, b), b) for i, b in enumerate(reference_images or [])]
+
     async with httpx.AsyncClient(timeout=120.0) as client, _OPENAI_DISPATCH_LOCK:
-        if reference_images:
+        if probed:
             # Reference-bearing path: POST /v1/images/edits with multipart
             # `image[]` uploads. Per the brief's hero shots (which used
             # `image[]=dog-2.jpg`), the edits endpoint is the canonical way
@@ -294,11 +312,11 @@ async def generate_openai(
                     ("output_compression", (None, str(int(output_compression))))
                 )
             files: list[tuple[str, tuple[str, bytes, str]]] = []
-            for idx, ref_bytes in enumerate(reference_images):
+            for idx, (mime, ref_bytes) in enumerate(probed):
                 files.append(
                     (
                         "image[]",
-                        (f"reference_{idx}.png", ref_bytes, "image/png"),
+                        (f"reference_{idx}.{_MIME_EXT[mime]}", ref_bytes, mime),
                     )
                 )
             response = await _post_multipart_with_backoff(

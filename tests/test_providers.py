@@ -159,6 +159,30 @@ class TestGeminiReferences:
         assert parts[2]["inlineData"]["data"] == b64mod.b64encode(ref_b).decode("ascii")
 
     @pytest.mark.anyio
+    async def test_references_capped_at_api_limit(self, httpx_mock):
+        import base64 as b64mod
+        import json as _json
+
+        from mcp_bildsprache.providers.gemini import MAX_REFERENCE_IMAGES, generate_gemini
+
+        b64 = b64mod.b64encode(_fake_png_bytes()).decode()
+        httpx_mock.add_response(
+            json={"candidates": [{"content": {"parts": [
+                {"inlineData": {"data": b64, "mimeType": "image/png"}}
+            ]}}]},
+        )
+        refs = [_fake_png_bytes(8, 8) for _ in range(MAX_REFERENCE_IMAGES + 2)]
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", Settings())
+            await generate_gemini("test prompt", 512, 512, reference_images=refs)
+
+        parts = _json.loads(httpx_mock.get_request().content)["contents"][0]["parts"]
+        assert len(parts) == 1 + MAX_REFERENCE_IMAGES
+
+    @pytest.mark.anyio
     async def test_unsupported_mime_raises_valueerror_pre_request(self, httpx_mock):
         from mcp_bildsprache.providers.gemini import generate_gemini
 

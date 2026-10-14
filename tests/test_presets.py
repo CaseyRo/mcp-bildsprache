@@ -36,6 +36,19 @@ class TestGetPreset:
         assert "Register: professional" in preset
         assert "schematic" in preset.lower() or "workshop" in preset.lower()
 
+    def test_personal_register_carries_nordic_coast_place(self):
+        preset = get_preset("casey", register="personal").lower()
+        assert "brandenburg" in preset
+        assert "danish" in preset and "dunes" in preset
+
+    def test_professional_register_carries_lighter_nordic_place(self):
+        preset = get_preset("casey", register="professional").lower()
+        assert "nordic" in preset
+        assert "dunes" not in preset
+
+    def test_base_preset_has_no_place_line(self):
+        assert "nordic" not in get_preset("casey").lower()
+
     def test_legacy_casey_berlin_resolves_to_casey(self):
         preset = get_preset("@casey.berlin")
         assert "paper bone" in preset.lower()

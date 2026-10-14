@@ -8,11 +8,14 @@ revised_prompt capture, 429 backoff, missing API key.
 from __future__ import annotations
 
 import base64
+import io
 
 import pytest
+from PIL import Image
 from pytest_httpx import HTTPXMock
 
 from mcp_bildsprache.providers.openai import (
+    MAX_REFERENCE_IMAGES,
     OpenAIRateLimited,
     OpenAISizeError,
     _validate_and_snap_size,
@@ -21,6 +24,12 @@ from mcp_bildsprache.providers.openai import (
 
 
 TINY_WEBP = base64.b64encode(b"fake-image-bytes").decode("ascii")
+
+
+def _ref(fmt: str = "WEBP") -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4)).save(buf, format=fmt)
+    return buf.getvalue()
 
 
 def _response_body(revised_prompt: str | None = None, usage: dict | None = None) -> dict:
@@ -292,7 +301,7 @@ class TestRateLimitBackoff:
 
         with caplog.at_level(logging.ERROR, logger="mcp_bildsprache.providers.openai"):
             with pytest.raises(OpenAIRateLimited):
-                await generate_openai("prompt", reference_images=[b"ref"])
+                await generate_openai("prompt", reference_images=[_ref()])
 
         assert any(
             "event=image_rate_limited" in rec.getMessage()
@@ -362,7 +371,7 @@ class TestReferenceImages:
 
         with caplog.at_level(logging.INFO):
             r = await generate_openai(
-                "prompt", reference_images=[b"ref1", b"ref2"]
+                "prompt", reference_images=[_ref(), _ref()]
             )
         assert r.model == "gpt-image-2"
         # Routing log surfaces the count + endpoint.
@@ -378,6 +387,36 @@ class TestReferenceImages:
         assert b'name="image[]"' in body
         # Two file parts.
         assert body.count(b'name="image[]"') == 2
+
+    async def test_reference_uploads_carry_real_mime_type(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(
+            url="https://api.openai.com/v1/images/edits",
+            json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}),
+        )
+        await generate_openai("prompt", reference_images=[_ref("WEBP"), _ref("JPEG")])
+        body = httpx_mock.get_request().read()
+        assert b'filename="reference_0.webp"' in body
+        assert b"Content-Type: image/webp" in body
+        assert b'filename="reference_1.jpg"' in body
+        assert b"Content-Type: image/jpeg" in body
+
+    async def test_reference_images_capped_at_api_limit(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(
+            url="https://api.openai.com/v1/images/edits",
+            json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}),
+        )
+        refs = [_ref() for _ in range(MAX_REFERENCE_IMAGES + 3)]
+        await generate_openai("prompt", reference_images=refs)
+        body = httpx_mock.get_request().read()
+        assert body.count(b'name="image[]"') == MAX_REFERENCE_IMAGES
+
+    async def test_unreadable_reference_fails_before_dispatch(self) -> None:
+        with pytest.raises(ValueError, match=r"reference_images\[0\]"):
+            await generate_openai("prompt", reference_images=[b"not-an-image"])
 
     async def test_no_reference_images_uses_generations_endpoint(
         self, httpx_mock: HTTPXMock

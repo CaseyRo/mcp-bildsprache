@@ -2,15 +2,15 @@
   "version": 1,
   "slots": {
     "casey": {
-      "files": ["casey-1.webp", "casey-2.webp"],
+      "files": ["casey-1.webp", "casey-2.webp", "casey-3.webp", "casey-4.webp", "casey-5.webp"],
       "tags": ["person", "primary"]
     },
     "dog-1": {
-      "files": ["dog-1-1.webp"],
+      "files": ["dog-1-1.webp", "dog-1-2.webp", "dog-1-3.webp"],
       "tags": ["dog", "companion"]
     },
     "dog-2": {
-      "files": ["dog-2-1.webp"],
+      "files": ["dog-2-1.webp", "dog-2-2.webp", "dog-2-3.webp"],
       "tags": ["dog", "companion"]
     }
   },
@@ -28,7 +28,11 @@
         "personal",
         "home",
         "morning",
-        "evening"
+        "evening",
+        "beach",
+        "coast",
+        "dunes",
+        "shore"
       ],
       "dog-2": [
         "walk",
@@ -41,7 +45,11 @@
         "personal",
         "home",
         "morning",
-        "evening"
+        "evening",
+        "beach",
+        "coast",
+        "dunes",
+        "shore"
       ]
     },
     "exclude_if_prompt_matches": {
