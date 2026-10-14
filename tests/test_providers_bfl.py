@@ -133,6 +133,7 @@ class TestEditFlux3:
         assert result.mime_type == "image/jpeg"
         assert result.model == "flux-3-image"
         assert result.cost_estimate == "$0.1"
+        assert result.cost_model == "flux-3-image-2k"
         assert result.revised_prompt == "expanded"
 
     async def test_url_source_without_size_keeps_framing(self, httpx_mock: HTTPXMock) -> None:

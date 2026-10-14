@@ -221,6 +221,20 @@ class TestCostBlock:
         assert p["cost"]["method"] == "legacy-string"
         assert p["cost"]["source_amount"] == pytest.approx(0.12, rel=1e-6)
 
+    def test_cost_model_prices_from_its_own_row(self) -> None:
+        # FLUX 3 reports model "flux-3-image" but bills per resolution tier row.
+        pr = ProviderResult(
+            image_data=b"x",
+            mime_type="image/jpeg",
+            model="flux-3-image",
+            cost_estimate="$0.1",
+            cost_model="flux-3-image-2k",
+        )
+        p = build_attribution(provider_result=pr, prompt_anchor="x")
+        assert p["model"] == "flux-3-image"
+        assert p["cost"]["method"] == "table-v1"
+        assert p["cost"]["source_amount"] == pytest.approx(0.10, rel=1e-6)
+
 
 class TestProvenance:
     def test_gemini_defaults_to_synthid_true(self) -> None:

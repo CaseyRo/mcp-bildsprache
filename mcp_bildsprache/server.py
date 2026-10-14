@@ -48,8 +48,9 @@ from mcp_bildsprache.providers.bfl import (
     FLUX3_MODEL,
     Region,
     compose_edit_prompt,
+    cost_model_for,
     edit_flux3,
-    estimate_usd,
+    resolution_for,
 )
 from mcp_bildsprache.providers.gemini import generate_gemini
 from mcp_bildsprache.providers.openai import IMAGE_MODELS as OPENAI_MODELS
@@ -66,7 +67,6 @@ from mcp_bildsprache.attribution import (
     estimate_cost_eur,
     format_legacy_cost_estimate,
     get_contract_state,
-    usd_to_eur,
     validate_shared_contract,
 )
 from mcp_bildsprache.models import (
@@ -1678,7 +1678,10 @@ async def edit_image(
     ]
     edit_prompt = compose_edit_prompt(instruction, flux_regions)
 
-    est_cost = usd_to_eur(estimate_usd(*size)) if size else usd_to_eur(estimate_usd(1024, 1024))
+    # No size → edit_flux3 keeps the source framing at the 1k tier.
+    est_cost = estimate_cost_eur(
+        provider="bfl", model=cost_model_for(resolution_for(*size) if size else "1k")
+    )
     if not await _confirm_cost(
         ctx, what="Editing this image", estimated_cost_eur=est_cost, provider="bfl"
     ):

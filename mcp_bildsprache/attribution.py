@@ -233,7 +233,11 @@ def build_attribution(
         "kind": "image",
         "tokens": _build_usage(provider_result),
         "cost": _build_cost_block(
-            provider, provider_result.model, provider_result, tier, image_format
+            provider,
+            provider_result.cost_model or provider_result.model,
+            provider_result,
+            tier,
+            image_format,
         ),
         "prompt_anchor": prompt_anchor,
         "prompt_hash": _prompt_hash(effective),
@@ -360,14 +364,6 @@ def estimate_cost_eur(
         logger.debug("estimate_cost_eur: compute_cost failed for %s/%s: %s", provider, model, exc)
         return None
     return result.amount_eur
-
-
-def usd_to_eur(usd: float) -> float | None:
-    """Convert a listed USD price at the cost table's FX snapshot."""
-    try:
-        return round(usd * float(_get_cost_table()["fx"]["usd_eur"]), 6)
-    except Exception:  # pragma: no cover — table load is validated at startup
-        return None
 
 
 def format_legacy_cost_estimate(payload: dict[str, Any]) -> str:
