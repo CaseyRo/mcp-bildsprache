@@ -47,6 +47,7 @@ class ProviderResult:
     revised_prompt: str | None = None      # Provider-revised prompt (OpenAI).
     model_version: str | None = None       # Dated snapshot when the provider exposes one.
     provenance_flags: dict | None = None   # Per-provider provenance (e.g. {"synthid": True}).
+    cost_model: str | None = None          # Cost-table row when it differs from ``model`` (e.g. a FLUX 3 tier).
 
 
 @dataclass(frozen=True, slots=True)

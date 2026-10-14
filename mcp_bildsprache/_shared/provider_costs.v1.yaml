@@ -72,6 +72,23 @@ bfl:
     kind: image
     usd: 0.03
   # flux-kontext-pro DROPPED (model lineup refresh, CDI-1264): superseded.
+  # FLUX 3 Image (launched 2026-10-01; prices from bfl.ai pricing page,
+  # 2026-10-12). Backs bildsprache's edit_image. Billed per image by output
+  # resolution tier, so each priced tier is its own row: the caller picks
+  # flux-3-image-<tier> from the resolution it requested. The 768sq and 1.5k
+  # tiers are unpriced on the pricing page and are never requested.
+  flux-3-image-1k:
+    mode: per-image
+    kind: image
+    usd: 0.048
+  flux-3-image-2k:
+    mode: per-image
+    kind: image
+    usd: 0.10
+  flux-3-image-4k:
+    mode: per-image
+    kind: image
+    usd: 0.607
   flux-pro-1.1:                       # legacy fallback — retained for now
     mode: per-image
     kind: image

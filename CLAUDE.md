@@ -24,7 +24,7 @@ FastMCP 4 server that exposes brand-aware image generation as MCP tools. The act
 - `storage.py` — `store_image` / `store_raw_image`, slug collisions, JSON sidecars. `resolve_stored_image` maps a hosted URL or storage path back to the file (never outside the storage root).
 - `slugs.py` — slug generation + `BRAND_PREFIXES` (URL-path dir per brand). New `casey/` prefix; legacy `casey-berlin/` and `cdit/` paths preserved on the static mount for historical URLs.
 - `config.py` — pydantic-settings env surface (API keys, `TRANSPORT`, Keycloak/API-key auth vars, data dir).
-- `types.py` — shared dataclasses, notably `ProviderResult(image_data, mime_type, model, cost_estimate, usage?, revised_prompt?, model_version?)` and `ProviderTemporarilyDisabled` exception.
+- `types.py` — shared dataclasses, notably `ProviderResult(image_data, mime_type, model, cost_estimate, usage?, revised_prompt?, model_version?, cost_model?)` and `ProviderTemporarilyDisabled` exception.
 - `auth.py` — `create_auth` returning the composed `MultiAuth` for HTTP mode.
 
 Package: `mcp_bildsprache` · Entry point: `mcp-bildsprache = mcp_bildsprache.server:main` · Python ≥3.11.
@@ -124,7 +124,7 @@ Tier 1 OpenAI rate-limit posture: existing `_post_with_backoff` (1s/4s/10s + jit
 
 `edit_image(image, instruction, regions?, context?, dimensions?)` sends one source image to FLUX 3 (`POST https://api.bfl.ai/v1/flux-3-image`, then poll `polling_url` for `result.sample`). A stored Bildsprache image is read from disk and sent as base64; any other https URL is passed to BFL to fetch (the server never fetches arbitrary URLs itself). No brand preset is injected: the edit keeps the source's look. Output size defaults to the source size; FLUX 3 only takes an `aspect_ratio` token and an equal-area `resolution` tier (1k/2k/4k at $0.048/$0.10/$0.607), and the pipeline crops to the exact size. `grounding` (web search) is always off.
 
-Regions are `[left, top, right, bottom]` on a 0-1000 grid. BFL wants boxes inside the prompt as `<id>` tags plus a JSON rows array, in `[y0, x0, y1, x1]` order (their `to_bbox` helper); `providers/bfl.py::_bfl_box` is the only place that knows the order. Kinds map to BFL's: `edit`/`add` → `new`, `keep` → `anchor`, `move` → `move`. FLUX 3 is not in the mirrored cost table yet, so its price rides in the legacy `$x` cost string (`method: legacy-string` in `ai_attribution`); add `bfl.flux-3-image-*` rows upstream in CDiT-marketingskills to make it table-priced.
+Regions are `[left, top, right, bottom]` on a 0-1000 grid. BFL wants boxes inside the prompt as `<id>` tags plus a JSON rows array, in `[y0, x0, y1, x1]` order (their `to_bbox` helper); `providers/bfl.py::_bfl_box` is the only place that knows the order. Kinds map to BFL's: `edit`/`add` → `new`, `keep` → `anchor`, `move` → `move`. The cost table prices each tier as its own row (`bfl.flux-3-image-1k|2k|4k`); `edit_flux3` sets `ProviderResult.cost_model` to the tier it requested so `ai_attribution` is table-priced (`method: table-v1`).
 
 ### Diagram tool (`generate_diagram`)
 

@@ -36,10 +36,10 @@ logger = logging.getLogger(__name__)
 FLUX3_MODEL = "flux-3-image"
 FLUX3_URL = "https://api.bfl.ai/v1/flux-3-image"
 
-# USD per image by resolution tier (BFL pricing page, 2026-10-12). Not in the
-# shared cost table yet (that file mirrors CDiT-marketingskills), so the
-# legacy "$x" cost string carries the price into ai_attribution.
-# ``1.5k`` is unpriced on the pricing page, so it is never chosen.
+# USD per image by resolution tier (BFL pricing page, 2026-10-12). The shared
+# cost table prices each tier as its own row (``cost_model_for``); this copy
+# only feeds the legacy "$x" cost string. ``1.5k`` is unpriced on the pricing
+# page, so it is never chosen.
 RESOLUTION_USD: dict[str, float] = {"1k": 0.048, "2k": 0.100, "4k": 0.607}
 
 # Output aspect ratios FLUX 3 accepts (besides "auto").
@@ -147,8 +147,9 @@ def closest_aspect_ratio(width: int, height: int) -> str:
     return min(_ASPECT_RATIOS, key=lambda t: abs(target - math.log(_ASPECT_RATIOS[t])))
 
 
-def estimate_usd(width: int, height: int) -> float:
-    return RESOLUTION_USD[resolution_for(width, height)]
+def cost_model_for(resolution: str) -> str:
+    """Cost-table row for a resolution tier (``bfl.flux-3-image-<tier>``)."""
+    return f"{FLUX3_MODEL}-{resolution}"
 
 
 async def edit_flux3(
@@ -220,6 +221,7 @@ async def edit_flux3(
         # FLUX 3 expands the prompt (and may add boxes itself); keep what it ran.
         revised_prompt=result.get("prompt"),
         model_version=FLUX3_MODEL,
+        cost_model=cost_model_for(resolution),
         provenance_flags={"synthid": False, "c2pa": False},
     )
 
