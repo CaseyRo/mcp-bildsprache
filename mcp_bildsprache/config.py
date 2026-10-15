@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     bfl_api_key: SecretStr = SecretStr("")
 
     # OpenAI image model. Empty (default) = generate_image picks per call:
-    # gpt-image-2 for identity scenes, gpt-image-2.5-flare otherwise (A/B
-    # 2026-09-28). Set it (e.g. to pin a snapshot) to force one model.
+    # gpt-image-2.5-sunburst for identity scenes (bake-off 2026-10-15),
+    # gpt-image-2.5-flare otherwise. Set it (e.g. to pin a snapshot) to force one model.
     openai_image_model: str = ""
 
     # Image hosting

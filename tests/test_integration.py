@@ -414,7 +414,7 @@ class TestIdentityIntegration:
 
 
 class TestDefaultModelSplit:
-    """No model hint + no OPENAI_IMAGE_MODEL: identity scene → gpt-image-2,
+    """No model hint + no OPENAI_IMAGE_MODEL: identity scene → gpt-image-2.5-sunburst,
     otherwise → gpt-image-2.5-flare. An explicit model always wins."""
 
     async def _run(self, tmp_path, monkeypatch, **kwargs):
@@ -435,7 +435,7 @@ class TestDefaultModelSplit:
         return result, record
 
     @pytest.mark.anyio
-    async def test_identity_pack_scene_uses_gpt_image_2(self, tmp_path, mock_provider, monkeypatch):
+    async def test_identity_pack_scene_uses_sunburst(self, tmp_path, mock_provider, monkeypatch):
         from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
 
         set_loaded_packs(load_identity_packs(TestIdentityIntegration._write_identity_pack(tmp_path)))
@@ -445,16 +445,16 @@ class TestDefaultModelSplit:
             )
         finally:
             set_loaded_packs({})
-        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2"
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-sunburst"
         assert result["model_reason"].startswith("identity scene")
         assert record["model_reason"] == result["model_reason"]
 
     @pytest.mark.anyio
-    async def test_caller_reference_images_use_gpt_image_2(self, tmp_path, mock_provider, monkeypatch):
+    async def test_caller_reference_images_use_sunburst(self, tmp_path, mock_provider, monkeypatch):
         result, _ = await self._run(
             tmp_path, monkeypatch, prompt="portrait", reference_images=[b"ref"]
         )
-        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2"
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-sunburst"
         assert result["model_reason"].startswith("identity scene")
 
     @pytest.mark.anyio
@@ -485,11 +485,11 @@ class TestDefaultModelSplit:
              "no person refs (prompt excludes people)"),
             ("morning walk in the forest, no people", {}, "gpt-image-2.5-flare",
              "no person refs (prompt excludes people)"),
-            ("portrait of Casey at his desk", {}, "gpt-image-2",
+            ("portrait of Casey at his desk", {}, "gpt-image-2.5-sunburst",
              "identity scene (prompt names a person)"),
             ("portrait of Casey", {"include_people": False}, "gpt-image-2.5-flare",
              "no person refs (include_people=False)"),
-            ("A still life. No people.", {"include_people": True}, "gpt-image-2",
+            ("A still life. No people.", {"include_people": True}, "gpt-image-2.5-sunburst",
              "identity scene (include_people=True)"),
         ],
     )
