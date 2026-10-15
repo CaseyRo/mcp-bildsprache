@@ -183,6 +183,24 @@ class TestGeminiReferences:
         assert len(parts) == 1 + MAX_REFERENCE_IMAGES
 
     @pytest.mark.anyio
+    async def test_client_error_surfaces_google_reason(self, httpx_mock):
+        from mcp_bildsprache.providers.gemini import GEMINI_MODELS, generate_gemini
+
+        for _ in GEMINI_MODELS:
+            httpx_mock.add_response(
+                status_code=400,
+                json={"error": {"code": 400, "message": "Too many input images."}},
+            )
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", Settings())
+            with pytest.raises(ValueError, match="HTTP 400: Too many input images"):
+                await generate_gemini(
+                    "p", 512, 512, reference_images=[_fake_png_bytes(8, 8)]
+                )
+
+    @pytest.mark.anyio
     async def test_unsupported_mime_raises_valueerror_pre_request(self, httpx_mock):
         from mcp_bildsprache.providers.gemini import generate_gemini
 

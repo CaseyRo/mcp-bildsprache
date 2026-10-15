@@ -266,6 +266,16 @@ async def _generate_with_model(
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, json=payload, headers=headers)
+        if 400 <= response.status_code < 500:
+            # A bare raise_for_status() hides Google's reason ("400 Bad
+            # Request" only). The error body carries no key: auth is a header.
+            try:
+                reason = response.json().get("error", {}).get("message", "")
+            except ValueError:
+                reason = response.text
+            raise ValueError(
+                f"Gemini ({model}) HTTP {response.status_code}: {reason[:300]}"
+            )
         response.raise_for_status()
         data = response.json()
 
