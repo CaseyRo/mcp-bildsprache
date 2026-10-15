@@ -42,12 +42,15 @@ Summary:
 
 ## Populating the volume
 
-Copy the brand directories into the `identity-data` volume out-of-band, for
-example with a throwaway container:
+Copy the brand directories into the identity volume out-of-band. Compose
+prefixes the volume with the project name, so in production (Komodo stack
+`git-mcp-bildsprache-nebula`) it is `git-mcp-bildsprache-nebula_identity-data`,
+not `identity-data`; check with `docker volume ls | grep identity-data`. For
+example, with a throwaway container:
 
 ```bash
 docker run --rm \
-  -v identity-data:/data/identity \
+  -v git-mcp-bildsprache-nebula_identity-data:/data/identity \
   -v "$PWD/identity-staging":/src:ro \
   alpine sh -c 'cp -R /src/* /data/identity/'
 docker compose restart
