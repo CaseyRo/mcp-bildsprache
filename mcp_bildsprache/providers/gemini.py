@@ -1,7 +1,10 @@
 """Gemini (Nano Banana) image generation provider.
 
-Two active models (model lineup refresh, CDI-1264):
+Three active models:
 
+* ``gemini-nano-banana-2.1`` (Nano Banana 2.1, stable 2026-10-06) — leads the
+  raster attempt order: Google rates it above Pro on character consistency at
+  a fraction of the price. Not in the shared cost table yet, so unpriced.
 * ``gemini-3.1-flash-image-preview`` (Nano Banana 2) — fast default, the
   raster fallback when OpenAI is unavailable.
 * ``gemini-3-pro-image-preview`` (Nano Banana Pro) — top editing/control +
@@ -35,6 +38,7 @@ logger = logging.getLogger(__name__)
 # ``generate_gemini``). It still trails flash in the generic fallback list so
 # a Pro failure degrades to the faster model.
 GEMINI_MODELS = [
+    "gemini-nano-banana-2.1",          # Nano Banana 2.1 (stable, best likeness)
     "gemini-3.1-flash-image-preview",  # Nano Banana 2 (fast default)
     "gemini-3-pro-image-preview",       # Nano Banana Pro (top quality, 4K)
 ]
@@ -48,6 +52,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 # bounded, and (2) cap the primary attempt tightly so the fast fallback still
 # fits inside the portal budget (44s + 14s ≈ 58s < 60s).
 _MODEL_TIMEOUTS: dict[str, float] = {
+    "gemini-nano-banana-2.1": 44.0,
     "gemini-3.1-flash-image-preview": 44.0,
     # Nano Banana Pro is slower (4K-capable). When it leads (diagram path), it
     # gets the larger share of the budget; flash trails it as the fast fallback.
@@ -112,6 +117,15 @@ def _image_size_for(width: int, height: int, model: str = "") -> str:
         return "4K"
     return "2K"
 
+# Nano Banana Pro and Nano Banana 2 take up to 14 input images per prompt
+# (consistent likeness for up to 5 people). Extras are dropped from the end.
+MAX_REFERENCE_IMAGES = 14
+
+# Of those, "character" images (people and pets) are capped lower: 4 on Nano
+# Banana 2.1 / 3.1 Flash, 5 on Pro (image-generation docs, 2026-10-15). An
+# identity pack is all characters, so server.py spreads it to this many.
+GEMINI_MAX_CHARACTER_REFS = 4
+
 # Mapping of Pillow "format" strings to the mime types Gemini's inlineData
 # parts accept. Anything outside this set → ValueError.
 _PILLOW_FORMAT_TO_MIME = {
@@ -151,8 +165,9 @@ async def generate_gemini(
 ) -> ProviderResult:
     """Generate an image using Gemini's multimodal generation.
 
-    By default tries Nano Banana 2 (``gemini-3.1-flash-image-preview``) first,
-    then Nano Banana Pro (``gemini-3-pro-image-preview``) if it fails. Pass
+    By default tries Nano Banana 2.1 (``gemini-nano-banana-2.1``) first, then
+    Nano Banana 2 (``gemini-3.1-flash-image-preview``), then Nano Banana Pro
+    (``gemini-3-pro-image-preview``). Pass
     ``model`` to put a specific model at the front of the attempt order — the
     diagram path uses this to prefer Nano Banana Pro (top editing/control + 4K)
     while keeping the remaining models as fallbacks. An unknown ``model`` is
@@ -170,6 +185,13 @@ async def generate_gemini(
 
     # Probe mime types up-front so we fail fast with a clear error before
     # any HTTP call.
+    if reference_images and len(reference_images) > MAX_REFERENCE_IMAGES:
+        logger.warning(
+            "gemini: %d reference images, sending the first %d",
+            len(reference_images),
+            MAX_REFERENCE_IMAGES,
+        )
+        reference_images = reference_images[:MAX_REFERENCE_IMAGES]
     if reference_images:
         probed = [(_probe_mime(i, b), b) for i, b in enumerate(reference_images)]
     else:
@@ -242,7 +264,7 @@ async def _generate_with_model(
     image_config: dict[str, str] = {
         "aspectRatio": _closest_aspect_ratio(width, height),
     }
-    if model.startswith("gemini-3"):
+    if model.startswith(("gemini-3", "gemini-nano-banana")):
         image_config["imageSize"] = _image_size_for(width, height, model)
 
     payload = {
@@ -255,6 +277,16 @@ async def _generate_with_model(
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, json=payload, headers=headers)
+        if 400 <= response.status_code < 500:
+            # A bare raise_for_status() hides Google's reason ("400 Bad
+            # Request" only). The error body carries no key: auth is a header.
+            try:
+                reason = response.json().get("error", {}).get("message", "")
+            except ValueError:
+                reason = response.text
+            raise ValueError(
+                f"Gemini ({model}) HTTP {response.status_code}: {reason[:300]}"
+            )
         response.raise_for_status()
         data = response.json()
 

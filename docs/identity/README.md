@@ -42,12 +42,15 @@ Summary:
 
 ## Populating the volume
 
-Copy the brand directories into the `identity-data` volume out-of-band, for
-example with a throwaway container:
+Copy the brand directories into the identity volume out-of-band. Compose
+prefixes the volume with the project name, so in production (Komodo stack
+`git-mcp-bildsprache-nebula`) it is `git-mcp-bildsprache-nebula_identity-data`,
+not `identity-data`; check with `docker volume ls | grep identity-data`. For
+example, with a throwaway container:
 
 ```bash
 docker run --rm \
-  -v identity-data:/data/identity \
+  -v git-mcp-bildsprache-nebula_identity-data:/data/identity \
   -v "$PWD/identity-staging":/src:ro \
   alpine sh -c 'cp -R /src/* /data/identity/'
 docker compose restart
@@ -65,7 +68,13 @@ Slot names are free-form. A slot whose `tags` include `dog` follows the
 
 - WebP or JPEG, roughly 200 to 500 KB each (they are uploaded to the provider
   on every call that uses them).
-- Keep the per-slot `files` list short (1 or 2 images).
+- More shots per slot give a closer likeness: 4 to 6 for a person, 2 or 3 per
+  dog, with different angles, light and distance (a side profile and a walking
+  shot help most). The 1-or-2 rule dated from single-reference FLUX models.
+- Providers cap refs per call: OpenAI 16, Gemini 14. Extras are dropped from
+  the end with a WARN, so the person slot should come first in the manifest.
+- Include keywords are plain substring matches, so avoid short words that hide
+  inside others ("sea" matches "research").
 
 ## Safe degradation
 

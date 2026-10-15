@@ -33,6 +33,7 @@ from mcp_bildsprache.identity import (
     resolve_identity_for_call,
     people_hint,
     set_loaded_packs,
+    spread_across_slots,
 )
 from mcp_bildsprache.pipeline import process_image
 from mcp_bildsprache.presets import (
@@ -52,7 +53,7 @@ from mcp_bildsprache.providers.bfl import (
     edit_flux3,
     resolution_for,
 )
-from mcp_bildsprache.providers.gemini import generate_gemini
+from mcp_bildsprache.providers.gemini import GEMINI_MAX_CHARACTER_REFS, generate_gemini
 from mcp_bildsprache.providers.openai import IMAGE_MODELS as OPENAI_MODELS
 from mcp_bildsprache.providers.openai import check_options as check_openai_options
 from mcp_bildsprache.providers.openai import generate_openai
@@ -340,9 +341,10 @@ def _pick_raster_model(
     """generate_image's model and a short why.
 
     Explicit model > OPENAI_IMAGE_MODEL > the default split (Casey, 2026-09-28
-    A/B): identity scenes (PERSON refs attached) get gpt-image-2, since
-    gpt-image-2.5-flare drew Casey twice in 1 of 3; everything else, dog-only
-    refs included, gets flare at ~half the price. ``why`` names the path that
+    A/B): identity scenes (PERSON refs attached) get gpt-image-2.5-sunburst
+    (Casey's pick in the 2026-10-15 bake-off with the 11-photo pack; before
+    that gpt-image-2, since flare drew Casey twice in 1 of 3); everything
+    else, dog-only refs included, gets flare at ~half the price. ``why`` names the path that
     decided the person refs.
     """
     why = f" ({why})" if why else ""
@@ -351,7 +353,7 @@ def _pick_raster_model(
     if settings.openai_image_model:
         return settings.openai_image_model, "OPENAI_IMAGE_MODEL set"
     if identity_scene:
-        return "gpt-image-2", f"identity scene{why}: gpt-image-2 keeps one Casey"
+        return "gpt-image-2.5-sunburst", f"identity scene{why}: sunburst keeps Casey's likeness"
     return "gpt-image-2.5-flare", f"no person refs{why}: flare default (~half price)"
 
 
@@ -1176,7 +1178,7 @@ async def generate_image(
 
     Default model (no ``model``, no ``OPENAI_IMAGE_MODEL``): identity scenes
     (identity-pack PERSON refs or caller ``reference_images``) render on
-    gpt-image-2; everything else, dog-only scenes included, on the cheaper
+    gpt-image-2.5-sunburst; everything else, dog-only scenes included, on the cheaper
     gpt-image-2.5-flare. The result's ``model_reason`` says which rule applied
     and why the person refs were (not) attached. Gemini Nano Banana is also active. FLUX and Recraft are
     temporarily disabled at the dispatcher; hinting at them raises
@@ -1209,7 +1211,7 @@ async def generate_image(
             slots (manifest slots tagged ``dog``), False = suppress them. Ignored when no
             identity pack is loaded for the resolved context.
         include_people: Override whether Casey's person refs attach for
-            ``casey``: True = force them (gpt-image-2), False = suppress them
+            ``casey``: True = force them (gpt-image-2.5-sunburst), False = suppress them
             (flare). None (default) reads the prompt: "no people", "nobody",
             "still life", "empty room", "without people", "keine Personen",
             "ohne Menschen" → no refs; a person word (Casey, man, person,
@@ -1270,6 +1272,10 @@ async def generate_image(
         )
     except ProviderTemporarilyDisabled as e:
         raise ToolError(f"PROVIDER_TEMPORARILY_DISABLED: {e.message}") from e
+    if selected_provider == "gemini" and used_identity_pack:
+        # Gemini rejects calls over its per-call character-image cap (400).
+        resolved_paths = spread_across_slots(pack, resolved_paths, GEMINI_MAX_CHARACTER_REFS)
+        refs_bytes = [_read_reference_bytes(p) for p in resolved_paths]
     specific_model, model_reason = _pick_raster_model(
         selected_provider, model, identity_scene=person_scene, why=person_why
     )
@@ -1810,11 +1816,11 @@ async def list_models() -> ModelsResult:
             "name": "OpenAI gpt-image",
             "models": list(OPENAI_MODELS),
             "default": settings.openai_image_model
-            or "gpt-image-2 for identity scenes, else gpt-image-2.5-flare",
+            or "gpt-image-2.5-sunburst for identity scenes, else gpt-image-2.5-flare",
             "best_for": (
                 "Default raster path. Without a model hint, identity scenes "
-                "(person/dog reference images) use gpt-image-2 (one Casey per "
-                "frame) and everything else gpt-image-2.5-flare (~half the price). "
+                "(person reference images) use gpt-image-2.5-sunburst (closest "
+                "likeness) and everything else gpt-image-2.5-flare (~half the price). "
                 "Strong typography in-image, "
                 "sibling-series consistency, reference image support. "
                 "gpt-image-2.5-flare is fast; gpt-image-2.5-sunburst is the "
@@ -1831,6 +1837,7 @@ async def list_models() -> ModelsResult:
             "id": "gemini",
             "name": "Gemini Nano Banana",
             "models": [
+                "gemini-nano-banana-2.1",
                 "gemini-3-pro-image-preview",
                 "gemini-3.1-flash-image-preview",
             ],
@@ -1838,8 +1845,9 @@ async def list_models() -> ModelsResult:
             "best_for": (
                 "Diagram path (default for generate_diagram → Nano Banana Pro: "
                 "top editing/control + 4K brand graphics, best in-image text "
-                "legibility, 'thinking' pre-render). Nano Banana 2 (flash) is "
-                "the fast raster fallback when OpenAI is unavailable."
+                "legibility, 'thinking' pre-render). For raster (model='gemini') "
+                "Nano Banana 2.1 leads: Google rates it best on character "
+                "consistency; identity scenes get at most 4 person/dog refs."
             ),
             "cost": "~$0.067/image (flash) – ~$0.24/image (Pro, 4K)",
             "status": "available",

@@ -106,12 +106,30 @@ def prompt_requests_text(prompt: str | None) -> bool:
     """True when the prompt itself asks for in-image text, a logo or a wordmark."""
     return bool(prompt and _TEXT_REQUEST.search(prompt))
 
+# Place (Casey, 2026-10-14): Brandenburg widened toward the Danish and Baltic
+# coast. Personal carries the full scene; professional takes the light and the
+# restraint, so work images lean the same way without turning into beach shots.
+_CASEY_PLACE_PERSONAL: str = (
+    "Place, when outdoors: Brandenburg reaching toward the Danish and Baltic "
+    "coast. Pine edges giving way to low dunes and marram grass, sandy paths, "
+    "pale wide skies, soft sea haze, weathered wooden jetties, black-tarred "
+    "and whitewashed timber houses. Indoors: Scandinavian restraint, natural "
+    "wood, linen and wool, few objects. Light: soft Nordic daylight, often "
+    "lightly overcast."
+)
+
+_CASEY_PLACE_PROFESSIONAL: str = (
+    "Place: Nordic calm. Soft northern daylight, pale wood, linen, uncluttered "
+    "rooms with a window onto pines or open coast."
+)
+
 _CASEY_REGISTER_PERSONAL: str = (
     "Register: personal (recognition surface — who Casey is). "
     "Mood: warmer, kitchen-table, late-afternoon light, intimate framing. "
     "Composition: hands and objects, walks, slow correspondence. "
     "Anchor refs: Patagonia (rootedness, place), Apple (restraint as "
-    "confidence). Lower contrast, more bone, more sensory texture."
+    "confidence). Lower contrast, more bone, more sensory texture. "
+    f"{_CASEY_PLACE_PERSONAL}"
 )
 
 _CASEY_REGISTER_PROFESSIONAL: str = (
@@ -120,7 +138,8 @@ _CASEY_REGISTER_PROFESSIONAL: str = (
     "Composition: workshop frame, tools, what-I-shipped detail. "
     "Anchor refs: Anthropic (thoughtfulness), Apple (careful innovation), "
     "Patagonia (values-beyond-profit). Higher contrast, more white space, "
-    "tool-and-object focus."
+    "tool-and-object focus. "
+    f"{_CASEY_PLACE_PROFESSIONAL}"
 )
 
 # Compositional rule applied when the casey identity pack resolves to a
