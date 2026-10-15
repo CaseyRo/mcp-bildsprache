@@ -450,6 +450,26 @@ class TestDefaultModelSplit:
         assert record["model_reason"] == result["model_reason"]
 
     @pytest.mark.anyio
+    async def test_gemini_gets_identity_refs_spread_to_its_cap(
+        self, tmp_path, mock_provider, monkeypatch
+    ):
+        from mcp_bildsprache.identity import load_identity_packs, set_loaded_packs
+
+        monkeypatch.setattr("mcp_bildsprache.server.GEMINI_MAX_CHARACTER_REFS", 2)
+        set_loaded_packs(load_identity_packs(TestIdentityIntegration._write_identity_pack(tmp_path)))
+        try:
+            await self._run(
+                tmp_path, monkeypatch, prompt="morning walk", context="casey", model="gemini"
+            )
+            gemini_refs = mock_provider.await_args.kwargs["reference_images"]
+            await self._run(tmp_path, monkeypatch, prompt="morning walk", context="casey")
+            openai_refs = mock_provider.await_args.kwargs["reference_images"]
+        finally:
+            set_loaded_packs({})
+        assert len(gemini_refs) == 2
+        assert len(openai_refs) == 3
+
+    @pytest.mark.anyio
     async def test_caller_reference_images_use_sunburst(self, tmp_path, mock_provider, monkeypatch):
         result, _ = await self._run(
             tmp_path, monkeypatch, prompt="portrait", reference_images=[b"ref"]

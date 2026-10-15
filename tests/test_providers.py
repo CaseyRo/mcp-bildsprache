@@ -320,9 +320,9 @@ class TestGeminiSizeConfig:
 
             await generate_gemini("test prompt", 1536, 1024)
 
-        # First (and only successful) request goes to the 3.x model.
+        # First (and only successful) request goes to the lead model.
         request = httpx_mock.get_request()
-        assert "gemini-3" in str(request.url)
+        assert "gemini-nano-banana-2.1" in str(request.url)
         # Auth is via header, never the URL query string (no key leak in errors).
         assert "key=" not in str(request.url)
         assert request.headers.get("x-goog-api-key") == "test-key"
@@ -346,7 +346,8 @@ class TestGeminiSizeConfig:
 
         png_bytes = _fake_png_bytes()
         b64 = b64mod.b64encode(png_bytes).decode()
-        # First model (3.1 flash) fails, second model (3-pro) succeeds.
+        # 2.1 and 3.1 flash fail, the third model (3-pro) succeeds.
+        httpx_mock.add_response(status_code=503)
         httpx_mock.add_response(status_code=503)
         httpx_mock.add_response(
             json={
@@ -367,7 +368,7 @@ class TestGeminiSizeConfig:
             result = await generate_gemini("test prompt", 1536, 1024)
 
         assert result.model == "gemini-3-pro-image-preview"
-        # The second request is the Nano Banana Pro call.
+        # The last request is the Nano Banana Pro call.
         last = httpx_mock.get_requests()[-1]
         assert "gemini-3-pro-image-preview" in str(last.url)
         image_cfg = _json.loads(last.content)["generationConfig"]["imageConfig"]
@@ -392,11 +393,11 @@ class TestGeminiProviderErrors:
 
     @pytest.mark.anyio
     async def test_no_candidates_raises(self, httpx_mock):
-        from mcp_bildsprache.providers.gemini import generate_gemini
+        from mcp_bildsprache.providers.gemini import GEMINI_MODELS, generate_gemini
 
-        # Both model attempts return no candidates
-        httpx_mock.add_response(json={"candidates": []})
-        httpx_mock.add_response(json={"candidates": []})
+        # Every model attempt returns no candidates
+        for _ in GEMINI_MODELS:
+            httpx_mock.add_response(json={"candidates": []})
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("GEMINI_API_KEY", "test-key")
@@ -409,7 +410,7 @@ class TestGeminiProviderErrors:
 
     @pytest.mark.anyio
     async def test_no_image_in_parts_raises(self, httpx_mock):
-        from mcp_bildsprache.providers.gemini import generate_gemini
+        from mcp_bildsprache.providers.gemini import GEMINI_MODELS, generate_gemini
 
         text_only_response = {
             "candidates": [{
@@ -418,9 +419,9 @@ class TestGeminiProviderErrors:
                 }
             }]
         }
-        # Both model attempts return text-only parts
-        httpx_mock.add_response(json=text_only_response)
-        httpx_mock.add_response(json=text_only_response)
+        # Every model attempt returns text-only parts
+        for _ in GEMINI_MODELS:
+            httpx_mock.add_response(json=text_only_response)
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("GEMINI_API_KEY", "test-key")
@@ -430,3 +431,4 @@ class TestGeminiProviderErrors:
 
             with pytest.raises(ValueError, match="no image data"):
                 await generate_gemini("test prompt", 512, 512)
+

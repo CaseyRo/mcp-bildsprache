@@ -33,6 +33,7 @@ from mcp_bildsprache.identity import (
     resolve_identity_for_call,
     people_hint,
     set_loaded_packs,
+    spread_across_slots,
 )
 from mcp_bildsprache.pipeline import process_image
 from mcp_bildsprache.presets import (
@@ -52,7 +53,7 @@ from mcp_bildsprache.providers.bfl import (
     edit_flux3,
     resolution_for,
 )
-from mcp_bildsprache.providers.gemini import generate_gemini
+from mcp_bildsprache.providers.gemini import GEMINI_MAX_CHARACTER_REFS, generate_gemini
 from mcp_bildsprache.providers.openai import IMAGE_MODELS as OPENAI_MODELS
 from mcp_bildsprache.providers.openai import check_options as check_openai_options
 from mcp_bildsprache.providers.openai import generate_openai
@@ -1271,6 +1272,10 @@ async def generate_image(
         )
     except ProviderTemporarilyDisabled as e:
         raise ToolError(f"PROVIDER_TEMPORARILY_DISABLED: {e.message}") from e
+    if selected_provider == "gemini" and used_identity_pack:
+        # Gemini rejects calls over its per-call character-image cap (400).
+        resolved_paths = spread_across_slots(pack, resolved_paths, GEMINI_MAX_CHARACTER_REFS)
+        refs_bytes = [_read_reference_bytes(p) for p in resolved_paths]
     specific_model, model_reason = _pick_raster_model(
         selected_provider, model, identity_scene=person_scene, why=person_why
     )
@@ -1832,6 +1837,7 @@ async def list_models() -> ModelsResult:
             "id": "gemini",
             "name": "Gemini Nano Banana",
             "models": [
+                "gemini-nano-banana-2.1",
                 "gemini-3-pro-image-preview",
                 "gemini-3.1-flash-image-preview",
             ],
@@ -1839,8 +1845,9 @@ async def list_models() -> ModelsResult:
             "best_for": (
                 "Diagram path (default for generate_diagram → Nano Banana Pro: "
                 "top editing/control + 4K brand graphics, best in-image text "
-                "legibility, 'thinking' pre-render). Nano Banana 2 (flash) is "
-                "the fast raster fallback when OpenAI is unavailable."
+                "legibility, 'thinking' pre-render). For raster (model='gemini') "
+                "Nano Banana 2.1 leads: Google rates it best on character "
+                "consistency; identity scenes get at most 4 person/dog refs."
             ),
             "cost": "~$0.067/image (flash) – ~$0.24/image (Pro, 4K)",
             "status": "available",

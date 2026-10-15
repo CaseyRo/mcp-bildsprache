@@ -14,6 +14,7 @@ from mcp_bildsprache.identity import (
     people_hint,
     resolve_identity,
     resolve_identity_for_call,
+    spread_across_slots,
 )
 from mcp_bildsprache.types import IdentityPack, IdentitySlot
 
@@ -293,3 +294,39 @@ class TestIncludePeople:
     def test_true_does_not_override_person_excluding_marker(self, tmp_path: Path):
         pack = _make_pack(tmp_path)
         assert self._names(pack, "a flat icon of Casey", include_people=True) == []
+
+
+class TestSpreadAcrossSlots:
+    def _pack(self, tmp_path: Path) -> IdentityPack:
+        def files(name: str, n: int) -> tuple[Path, ...]:
+            return tuple(tmp_path / f"{name}-{i}.webp" for i in range(1, n + 1))
+
+        return IdentityPack(
+            brand="@casey",
+            slots=(
+                IdentitySlot(name="casey", files=files("casey", 5)),
+                IdentitySlot(name="sien", files=files("sien", 3)),
+                IdentitySlot(name="fimme", files=files("fimme", 3)),
+            ),
+            always_include=("casey",),
+            include_if_prompt_matches={},
+            exclude_if_prompt_matches={},
+        )
+
+    def test_deals_one_per_slot_in_turn(self, tmp_path: Path):
+        pack = self._pack(tmp_path)
+        every = [f for slot in pack.slots for f in slot.files]
+        picked = spread_across_slots(pack, every, 4)
+        assert [p.name for p in picked] == [
+            "casey-1.webp", "sien-1.webp", "fimme-1.webp", "casey-2.webp"
+        ]
+
+    def test_only_spreads_resolved_paths(self, tmp_path: Path):
+        pack = self._pack(tmp_path)
+        casey_only = list(pack.slots[0].files)
+        assert spread_across_slots(pack, casey_only, 4) == casey_only[:4]
+
+    def test_under_limit_keeps_everything(self, tmp_path: Path):
+        pack = self._pack(tmp_path)
+        two = [pack.slots[0].files[0], pack.slots[1].files[0]]
+        assert spread_across_slots(pack, two, 4) == two

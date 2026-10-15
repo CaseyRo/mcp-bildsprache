@@ -408,3 +408,23 @@ def _legacy_form(canonical: str) -> str | None:
         "casey-berlin": "@casey.berlin",
         "yorizon": "@yorizon",
     }.get(canonical)
+
+
+def spread_across_slots(pack: IdentityPack, paths: list[Path], limit: int) -> list[Path]:
+    """Keep at most ``limit`` of ``paths``, taking one file per slot in turn.
+
+    Gemini caps "character" images per call (Nano Banana 2.1 takes 4, Pro 5).
+    Truncating the manifest-ordered list would keep only Casey's shots and drop
+    the dogs, so this deals round-robin across slots in manifest order:
+    casey-1, sien-1, fimme-1, casey-2, ...
+    """
+    path_set = set(paths)
+    per_slot = [[f for f in slot.files if f in path_set] for slot in pack.slots]
+    picked: list[Path] = []
+    depth = 0
+    while len(picked) < limit and any(len(files) > depth for files in per_slot):
+        for files in per_slot:
+            if depth < len(files) and len(picked) < limit:
+                picked.append(files[depth])
+        depth += 1
+    return picked
