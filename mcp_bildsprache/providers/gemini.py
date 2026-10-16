@@ -304,6 +304,23 @@ async def _generate_with_model(
                 mime_type=part["inlineData"]["mimeType"],
                 model=model,
                 cost_estimate="$0.01",
+                usage=_usage_from_metadata(data.get("usageMetadata")),
             )
 
     raise ValueError(f"Gemini ({model}) returned no image data in response")
+
+
+def _usage_from_metadata(meta: dict | None) -> dict | None:
+    """Map Gemini's usageMetadata onto the OpenAI-shaped usage dict.
+
+    ai_attribution prices per-token-usage rows from ``input_tokens`` /
+    ``output_tokens``; without them it falls back to the "$0.01" string.
+    Thinking tokens bill as output, so they count toward ``output_tokens``.
+    """
+    if not meta or "candidatesTokenCount" not in meta:
+        return None
+    return {
+        "input_tokens": int(meta.get("promptTokenCount") or 0),
+        "output_tokens": int(meta.get("candidatesTokenCount") or 0)
+        + int(meta.get("thoughtsTokenCount") or 0),
+    }

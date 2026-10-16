@@ -63,6 +63,42 @@ class TestGeminiProvider:
         assert result.image_data == png_bytes
         assert result.mime_type == "image/png"
         assert "gemini" in result.model
+        assert result.usage is None
+
+    @pytest.mark.anyio
+    async def test_usage_metadata_becomes_usage(self, httpx_mock):
+        import base64
+
+        from mcp_bildsprache.attribution import _build_cost_block
+        from mcp_bildsprache.providers.gemini import generate_gemini
+
+        b64 = base64.b64encode(_fake_png_bytes()).decode()
+        httpx_mock.add_response(
+            json={
+                "candidates": [{"content": {"parts": [
+                    {"inlineData": {"data": b64, "mimeType": "image/png"}}
+                ]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 2000,
+                    "candidatesTokenCount": 1120,
+                    "thoughtsTokenCount": 100,
+                },
+            },
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("GEMINI_API_KEY", "test-key")
+            from mcp_bildsprache.config import Settings
+            mp.setattr("mcp_bildsprache.providers.gemini.settings", Settings())
+
+            result = await generate_gemini("test prompt", 1024, 1024)
+
+        assert result.usage == {"input_tokens": 2000, "output_tokens": 1220}
+        assert result.model == "gemini-nano-banana-2.1"
+        cost = _build_cost_block("gemini", result.model, result, "standard", "raster")
+        assert cost["method"] == "table-v1"
+        # 2000 * $1.50/1M + 1220 * $30/1M
+        assert cost["source_amount"] == pytest.approx(0.0396, rel=1e-4)
 
     def test_gemini_models_catalog(self):
         # Model lineup refresh (CDI-1264): Nano Banana 2 (flash) + Nano Banana
