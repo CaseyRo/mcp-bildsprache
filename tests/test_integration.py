@@ -470,6 +470,15 @@ class TestDefaultModelSplit:
         assert len(openai_refs) == 3
 
     @pytest.mark.anyio
+    async def test_gemini_casey_scene_gets_warmth_clause(self, tmp_path, mock_provider, monkeypatch):
+        from mcp_bildsprache.presets import CASEY_GEMINI_WARMTH_CLAUSE
+
+        await self._run(tmp_path, monkeypatch, prompt="beach walk", context="casey", model="gemini")
+        assert CASEY_GEMINI_WARMTH_CLAUSE in mock_provider.await_args.args[0]
+        await self._run(tmp_path, monkeypatch, prompt="beach walk", context="casey")
+        assert CASEY_GEMINI_WARMTH_CLAUSE not in mock_provider.await_args.args[0]
+
+    @pytest.mark.anyio
     async def test_caller_reference_images_use_sunburst(self, tmp_path, mock_provider, monkeypatch):
         result, _ = await self._run(
             tmp_path, monkeypatch, prompt="portrait", reference_images=[b"ref"]

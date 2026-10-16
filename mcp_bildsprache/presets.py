@@ -153,6 +153,18 @@ CASEY_COMPOSITION_CLAUSE: str = (
     "them — not the lead."
 )
 
+# Nano Banana reads the Nordic "often lightly overcast" place line literally
+# and renders casey scenes cold and grey; the blind bake-off (Casey,
+# 2026-10-16) liked its realism but not its mood. Gemini raster only, gated by
+# server.py, so the OpenAI path keeps the preset exactly as it is.
+CASEY_GEMINI_WARMTH_CLAUSE: str = (
+    "Light and mood: warm and kind. Low golden sun or warm window light, "
+    "gentle warm skin tones, soft shadows, an affectionate, unhurried "
+    "atmosphere. Keep the place Nordic, but never cold: no blue or grey "
+    "cast, no gloomy overcast, no harsh light."
+)
+
+
 # ---------------------------------------------------------------------------
 # Active presets
 # ---------------------------------------------------------------------------

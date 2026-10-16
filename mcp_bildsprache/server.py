@@ -38,6 +38,7 @@ from mcp_bildsprache.identity import (
 from mcp_bildsprache.pipeline import process_image
 from mcp_bildsprache.presets import (
     CASEY_COMPOSITION_CLAUSE,
+    CASEY_GEMINI_WARMTH_CLAUSE,
     CASEY_REGISTER_OVERLAYS,
     PLATFORM_SIZES,
     PRESETS,
@@ -1317,6 +1318,8 @@ async def generate_image(
         from mcp_bildsprache.brands import normalize_brand as _normalize_brand
         if person_scene and used_identity_pack and _normalize_brand(context) == "casey":
             parts.append(CASEY_COMPOSITION_CLAUSE)
+        if selected_provider == "gemini" and _normalize_brand(context) == "casey":
+            parts.append(CASEY_GEMINI_WARMTH_CLAUSE)
     parts.append(prompt)
     if mood:
         parts.append(f"Mood/emotional register: {mood}")
