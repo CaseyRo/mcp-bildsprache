@@ -3,7 +3,12 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8007:8000"
+      # Bind to the host's tailnet IP, never 0.0.0.0: Docker publishes 0.0.0.0 past ufw,
+      # so only the Hetzner firewall would stand in front of it. BIND_IP comes from the
+      # Komodo stack environment (nebula-1: its tailnet IP). Unset = compose refuses to
+      # render, so the running container is left alone. Do NOT use 127.0.0.1: cloudflared
+      # (host network) reaches this port via the tailnet IP. See fleet-stacks SECURITY.md.
+      - "${BIND_IP:?set BIND_IP (tailnet IP) in the stack environment}:8007:8000"
     labels:
       # Docktail exposes the container on the Tailnet at
       # https://bildsprache.<tailnet>.ts.net/. The gallery sub-app is
