@@ -21,8 +21,7 @@ on:
 #
 # To enable upstream drift detection, add a fine-grained PAT with repo:read
 # on CaseyRo/CDiT-marketingskills as the `SHARED_CONTRACT_READ_TOKEN` secret.
-# Without the secret, the job falls back to a local structural check (valid
-# JSON / YAML / Python) and emits a warning.
+# Without the secret the job FAILS instead of passing silently.
 env:
   CANONICAL_REPO: CaseyRo/CDiT-marketingskills
   CANONICAL_BRANCH: main
@@ -52,9 +51,8 @@ jobs:
           GH_TOKEN: ${{ secrets.SHARED_CONTRACT_READ_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::SHARED_CONTRACT_READ_TOKEN not set — skipping upstream drift check. Only local structural validation ran."
-            echo "have_token=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::SHARED_CONTRACT_READ_TOKEN is not set, so upstream drift cannot be checked. Add the secret or delete this workflow."
+            exit 1
           fi
           mkdir -p /tmp/canonical
           for f in $FILES; do

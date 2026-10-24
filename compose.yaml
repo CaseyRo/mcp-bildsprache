@@ -2,6 +2,7 @@ services:
   mcp-bildsprache:
     build: .
     restart: unless-stopped
+    init: true
     ports:
       # Bind to the host's tailnet IP, never 0.0.0.0: Docker publishes 0.0.0.0 past ufw,
       # so only the Hetzner firewall would stand in front of it. BIND_IP comes from the
