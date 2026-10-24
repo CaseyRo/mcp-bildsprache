@@ -6,7 +6,7 @@ best-effort — we compute the payload always, but log a warning (not raise)
 if validation fails so one bad call never blocks image generation.
 
 The canonical schema + cost table live in CDiT-marketingskills/shared/ and
-are mirrored here at mcp_bildsprache/_shared/ (CI diff-check pending in §2).
+are mirrored here at mcp_bildsprache/_shared/ (drift checked monthly in the CDiT OS update, not CI).
 """
 
 from __future__ import annotations
