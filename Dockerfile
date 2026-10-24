@@ -18,7 +18,7 @@ COPY pyproject.toml uv.lock README.md ./
 COPY mcp_bildsprache/ ./mcp_bildsprache/
 COPY --from=rev /git_commit /app/.git_commit
 
-RUN pip install --no-cache-dir uv && \
+RUN pip install --no-cache-dir uv==0.13.5 && \
     uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt && \
     pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt && \
     pip install --no-cache-dir --no-deps . && \

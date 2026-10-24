@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -20,4 +24,13 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
+      # Scoped audit of the runtime lock (what the image ships). A bare `uvx pip-audit`
+      # audits its own tool env and always passes, so the input must be the export.
+      - name: Security audit (locked runtime deps)
+        run: |
+          uv export --frozen --no-dev --no-emit-project -o requirements-audit.txt
+          IGNORE=$(grep -v '^#' .github/pip-audit-ignore.txt | sed 's/^/--ignore-vuln /')
+          uvx pip-audit==2.9.0 --no-deps --disable-pip -r requirements-audit.txt $IGNORE
+      # Critical-subset lint only (syntax errors, undefined names). Full ruff is lint debt, deferred.
+      - run: uv run ruff check --select E9,F63,F7,F82
       - run: uv run pytest

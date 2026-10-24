@@ -1,0 +1,6 @@
+# Keep .git in the context: the rev stage reads the commit for /health.
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+tests
