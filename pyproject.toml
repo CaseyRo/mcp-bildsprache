@@ -11,8 +11,7 @@ dependencies = [
     "httpx>=0.28.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.14.2",
-    # Held in 12.x: every Pillow advisory is fixed only in 13.0.0 (major, separate follow-up).
-    "pillow>=12.3.0,<13",
+    "pillow>=13.0.0",  # GHSA: 37 advisories, all fixed only in 13.0.0
     "piexif>=1.1.3",
     "python-slugify>=8.0.0",
     "pyyaml>=6.0",

@@ -29,8 +29,7 @@ jobs:
       - name: Security audit (locked runtime deps)
         run: |
           uv export --frozen --no-dev --no-emit-project -o requirements-audit.txt
-          IGNORE=$(grep -v '^#' .github/pip-audit-ignore.txt | sed 's/^/--ignore-vuln /')
-          uvx pip-audit==2.9.0 --no-deps --disable-pip -r requirements-audit.txt $IGNORE
+          uvx pip-audit==2.9.0 --no-deps --disable-pip -r requirements-audit.txt
       # Critical-subset lint only (syntax errors, undefined names). Full ruff is lint debt, deferred.
       - run: uv run ruff check --select E9,F63,F7,F82
       - run: uv run pytest
