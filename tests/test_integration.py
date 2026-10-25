@@ -232,6 +232,49 @@ class TestDimensionHandling:
         assert result["dimensions"] == "1200x1200"
 
 
+class TestPresetBundles:
+    """CDI-1917: presets="<register>/<platform>" sets casey + register + platform."""
+
+    async def _call(self, tmp_path: Path, **kwargs):
+        from mcp_bildsprache.server import generate_image
+
+        with patch("mcp_bildsprache.server.settings", sync_wait_seconds=INLINE_WAIT), \
+             patch("mcp_bildsprache.storage.settings") as ss:
+            ss.image_storage_path = str(tmp_path)
+            ss.image_domain = "https://img.cdit-works.de"
+            return _d(await generate_image(prompt="a jetty at dawn", **kwargs))
+
+    @pytest.mark.anyio
+    async def test_bundle_sets_brand_register_and_platform(self, tmp_path: Path, mock_provider):
+        from mcp_bildsprache.presets import CASEY_REGISTER_OVERLAYS
+
+        result = await self._call(tmp_path, presets="personal/blog-hero")
+
+        assert result["brand_context"] == "casey"
+        assert result["platform"] == "blog-hero"
+        assert result["dimensions"] == "1600x900"
+        sent_prompt = mock_provider.await_args.args[0]
+        assert CASEY_REGISTER_OVERLAYS["personal"] in sent_prompt
+        assert CASEY_REGISTER_OVERLAYS["professional"] not in sent_prompt
+
+    @pytest.mark.anyio
+    async def test_explicit_args_win_over_bundle(self, tmp_path: Path, mock_provider):
+        from mcp_bildsprache.presets import CASEY_REGISTER_OVERLAYS
+
+        result = await self._call(
+            tmp_path,
+            presets="personal/blog-hero",
+            context="yorizon",
+            register="professional",
+            platform="og-image",
+        )
+
+        assert result["brand_context"] == "yorizon"
+        assert result["dimensions"] == "1200x630"
+        sent_prompt = mock_provider.await_args.args[0]
+        assert CASEY_REGISTER_OVERLAYS["personal"] not in sent_prompt
+
+
 class TestIdentityIntegration:
     """End-to-end generate_image with a stubbed identity pack — asserts
     that reference bytes, composition clause, routing, and structured log
@@ -960,6 +1003,7 @@ class TestAsyncDispatchPoll:
             s.openai_image_model = "gpt-image-2"
             s.image_domain = "https://img.cdit-works.de"
             s.sync_wait_seconds = 0.1  # tiny budget → handle returned fast
+            s.poll_wait_max_seconds = 20
             ss.image_storage_path = str(tmp_path)
             ss.image_domain = "https://img.cdit-works.de"
 
@@ -970,7 +1014,8 @@ class TestAsyncDispatchPoll:
             ))
 
         assert result["status"] == "pending"
-        assert result["poll_with"] == "get_image_result"
+        # CDI-1917: the hint names the poll tool AND its real long-poll ceiling.
+        assert result["poll_with"] == {"tool": "get_image_result", "wait_seconds": 20}
         assert "hosted_url" not in result
         assert result["job_id"]
         # The job is registered as pending right after dispatch.

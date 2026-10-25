@@ -65,6 +65,7 @@ from mcp_bildsprache.presets import (
     CASEY_COMPOSITION_CLAUSE,
     CASEY_REGISTER_OVERLAYS,
     PLATFORM_SIZES,
+    PRESET_BUNDLES,
     PRESETS,
     get_dimensions,
     get_preset,
@@ -149,6 +150,8 @@ Platform = Literal[
     "icon",
     "email-header",
 ]
+# "<register>/<platform>" shortcuts (CDI-1917); enumerated so the schema lists them.
+PresetBundle = Literal[tuple(PRESET_BUNDLES)]  # type: ignore[valid-type]
 
 PROVIDERS = {
     "gemini": generate_gemini,
@@ -867,8 +870,9 @@ async def _dispatch_and_maybe_wait(
     Returns:
         * the full result dict if the render finished within the wait budget
           (fast path → backward-compatible synchronous response), or
-        * ``{job_id, status: "pending", poll_with: "get_image_result"}`` if it
-          didn't finish in time (slow path → caller polls).
+        * ``{job_id, status: "pending", poll_with: {tool: "get_image_result",
+          wait_seconds}}`` if it didn't finish in time (slow path → caller
+          long-polls; ``wait_seconds`` is the get_image_result ceiling).
 
     Raises:
         Whatever the render coroutine raised, IF it failed within the inline-wait
@@ -887,7 +891,10 @@ async def _dispatch_and_maybe_wait(
         return {
             "job_id": job_id,
             "status": "pending",
-            "poll_with": "get_image_result",
+            "poll_with": {
+                "tool": "get_image_result",
+                "wait_seconds": int(settings.poll_wait_max_seconds),
+            },
             "model": model,
             "brand_context": brand,
             "dimensions": dimensions,
@@ -1140,6 +1147,7 @@ async def generate_image(
     prompt: str,
     context: BrandContext | None = None,
     register: Register | None = None,
+    presets: PresetBundle | None = None,
     model: Model | None = None,
     platform: Platform | None = None,
     dimensions: str | None = None,
@@ -1164,11 +1172,11 @@ async def generate_image(
       response_mode: "url", ...}``.
     * **Job handle** (slow path) — when the render does NOT finish in time (most
       gpt-image-2 / Nano-Banana-Pro renders take 50-80s), you get
-      ``{job_id, status: "pending", poll_with: "get_image_result", model,
-      brand_context, dimensions}`` immediately. The render KEEPS RUNNING
-      server-side; call ``get_image_result(job_id)`` (optionally with
-      ``wait_seconds`` to long-poll) to retrieve the ``hosted_url`` once it
-      completes. This avoids the portal severing a slow synchronous response
+      ``{job_id, status: "pending", poll_with: {tool: "get_image_result",
+      wait_seconds}, model, brand_context, dimensions}`` immediately. The render
+      KEEPS RUNNING server-side; call ``get_image_result(job_id=...,
+      wait_seconds=poll_with.wait_seconds)`` and repeat while ``status`` is
+      ``pending`` to retrieve the ``hosted_url`` once it completes. This avoids the portal severing a slow synchronous response
       with ``-32001`` even though the image was produced.
 
     Always inspect ``status`` / the presence of ``job_id``: if you got a job
@@ -1193,6 +1201,11 @@ async def generate_image(
                   manifesto-adjacent) or ``professional`` (verification,
                   workshop voice). Defaults to ``professional`` for casey
                   when omitted.
+        presets: Shortcut ``"<register>/<platform>"`` (e.g.
+                ``"professional/linkedin-post"``): sets ``context='casey'``,
+                ``register`` and ``platform`` in one value, so no
+                ``get_visual_presets`` call is needed first. Explicit
+                ``context`` / ``register`` / ``platform`` win over the bundle.
         model: Force a provider/model (always wins). OpenAI: ``gpt-image-2``,
                 ``gpt-image-2.5-flare`` (fast everyday), ``gpt-image-2.5-sunburst``
                 (premium, editing precision); ``openai`` = the server default split.
@@ -1225,6 +1238,12 @@ async def generate_image(
         transparent: OpenAI 2.5 models only: render on a transparent
                 background (kept as WebP alpha).
     """
+    if presets:
+        bundle_register, bundle_platform = PRESET_BUNDLES[presets]
+        context = context or "casey"
+        register = register or bundle_register
+        platform = platform or bundle_platform
+
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
     # ------------------------------------------------------------------
@@ -1429,8 +1448,9 @@ async def generate_diagram(
     Response shape is the same UNION as ``generate_image`` (CDI-1266): a fast
     render returns the hosted diagram inline; a slow one (Nano Banana Pro 4K can
     exceed the ~60s portal budget) returns ``{job_id, status: "pending",
-    poll_with: "get_image_result"}`` while the render continues server-side. Poll
-    ``get_image_result(job_id)`` for the eventual ``hosted_url``. Pass
+    poll_with: {tool: "get_image_result", wait_seconds}}`` while the render
+    continues server-side. Long-poll ``get_image_result(job_id, wait_seconds)``
+    for the eventual ``hosted_url``. Pass
     ``background=True`` to skip the inline wait and get the job handle immediately.
 
     Exactly one of ``prompt`` or ``mermaid`` must be provided.
@@ -1610,7 +1630,8 @@ async def edit_image(
 
     Response shape is the same UNION as ``generate_image``: the hosted edit
     inline when it finishes within {sync_wait}s, otherwise ``{job_id, status:
-    "pending", poll_with: "get_image_result"}`` while the edit keeps running.
+    "pending", poll_with: {tool: "get_image_result", wait_seconds}}`` while the
+    edit keeps running.
 
     Args:
         image: The image to edit. A Bildsprache ``hosted_url`` or its storage

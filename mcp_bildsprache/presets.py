@@ -206,6 +206,15 @@ PLATFORM_SIZES: dict[str, tuple[int, int]] = {
     "email-header": (600, 200),
 }
 
+# CDI-1917: generate_image(presets="<register>/<platform>") bundles, built from
+# the same tables get_visual_presets serves, so a caller can pick register +
+# platform in one enum value instead of reading the presets first.
+PRESET_BUNDLES: dict[str, tuple[str, str]] = {
+    f"{register}/{platform}": (register, platform)
+    for register in CASEY_REGISTER_OVERLAYS
+    for platform in PLATFORM_SIZES
+}
+
 
 def get_preset(
     context: str,
