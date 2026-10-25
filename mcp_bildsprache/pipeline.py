@@ -6,7 +6,7 @@ import hashlib
 import io
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from PIL import Image, ImageOps
 
@@ -69,7 +69,7 @@ def _build_exif(
             "prompt_hash": prompt_hash,
             "model": model,
             "brand_context": brand_context,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "generator": "Bildsprache AI",
         })
 

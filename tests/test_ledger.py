@@ -11,7 +11,7 @@ exercised in `test_integration.py`.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from mcp_bildsprache import ledger
@@ -200,7 +200,7 @@ class TestComputeStats:
 
     def test_per_model_attempts_success_fail_pct(self, tmp_path: Path):
         ledger_path = tmp_path / "led.jsonl"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recs = []
         # gpt-image-2: 3 attempts, 2 success, 1 provider_error -> 66.67%
         for i, outcome in enumerate(["success", "success", "provider_error"]):
@@ -251,7 +251,7 @@ class TestComputeStats:
 
     def test_window_excludes_old_records(self, tmp_path: Path):
         ledger_path = tmp_path / "led.jsonl"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         old = ledger.build_record(
             request_id="old", outcome="success", model="gpt-image-2",
             provider="openai", brand="casey", width=1, height=1,

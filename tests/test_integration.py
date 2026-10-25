@@ -1417,11 +1417,10 @@ class TestGenerationLedgerWiring:
         self, tmp_path: Path, mock_provider, monkeypatch
     ):
         """Acceptance: a broken ledger append must not break the generation."""
-        from mcp_bildsprache.server import generate_image
-
         # Point the ledger at an impossible path (parent is a file) so the
         # best-effort append fails internally.
         from mcp_bildsprache.config import settings as cfg
+        from mcp_bildsprache.server import generate_image
 
         blocker = tmp_path / "blocker"
         blocker.write_text("file-not-dir")

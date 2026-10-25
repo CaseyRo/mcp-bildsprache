@@ -53,7 +53,7 @@ import logging
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -80,7 +80,7 @@ _TAIL_CHUNK = 64 * 1024
 
 def _utc_now_iso() -> str:
     """UTC ISO-8601 with a trailing Z (matches the attribution timestamp shape)."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def new_request_id() -> str:
@@ -301,7 +301,7 @@ def _parse_ts(raw: Any) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -359,7 +359,7 @@ def compute_stats(
     separately so callers can see how many succeeded-but-undelivered.
     """
     if since is None and days is not None:
-        since = datetime.now(timezone.utc) - timedelta(days=days)
+        since = datetime.now(UTC) - timedelta(days=days)
 
     records = read_records(path=path, since=since, limit=limit)
 

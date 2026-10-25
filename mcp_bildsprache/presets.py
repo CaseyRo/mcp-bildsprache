@@ -65,7 +65,7 @@ def _casey_palette_clause() -> str:
 
 _CASEY_TYPOGRAPHY_CLAUSE: str = (
     "Typography (when in-image text appears): Vollkorn-style serif, "
-    "italic + roman, weights 400–900. Hierarchy via weight + size, never "
+    "italic + roman, weights 400–900. Hierarchy via weight + size, never "  # noqa: RUF001 (prompt typography)
     "via optical-size axis. NO all-caps anywhere — use weight or italic "
     "for emphasis."
 )

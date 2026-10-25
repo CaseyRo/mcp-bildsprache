@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastmcp.server.middleware import Middleware
 
@@ -34,7 +34,7 @@ class UsageMiddleware(Middleware):
             try:
                 sys.stderr.write(json.dumps({
                     "mcp_usage": 1,
-                    "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "ts": datetime.now(UTC).isoformat(timespec="seconds"),
                     "server": self.server,
                     "tool": getattr(context.message, "name", "?"),
                     "duration_ms": round((time.perf_counter() - start) * 1000),

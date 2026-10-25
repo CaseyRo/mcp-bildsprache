@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mcp_bildsprache.config import settings
@@ -188,7 +188,7 @@ def _build_sidecar(
     """Build the JSON sidecar metadata record."""
     domain = settings.image_domain.rstrip("/")
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "prompt": prompt,
         "prompt_hash": hashlib.sha256(prompt.encode()).hexdigest(),
         "model": model,

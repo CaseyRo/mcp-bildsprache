@@ -199,7 +199,10 @@ class TestGeminiReferences:
         import base64 as b64mod
         import json as _json
 
-        from mcp_bildsprache.providers.gemini import MAX_REFERENCE_IMAGES, generate_gemini
+        from mcp_bildsprache.providers.gemini import (
+            MAX_REFERENCE_IMAGES,
+            generate_gemini,
+        )
 
         b64 = b64mod.b64encode(_fake_png_bytes()).decode()
         httpx_mock.add_response(

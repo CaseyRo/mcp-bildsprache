@@ -13,7 +13,7 @@ import json
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -75,9 +75,9 @@ def _parse_created_at(raw: Any, sidecar_path: Path) -> datetime:
         except ValueError:
             pass
     try:
-        return datetime.fromtimestamp(sidecar_path.stat().st_mtime, tz=timezone.utc)
+        return datetime.fromtimestamp(sidecar_path.stat().st_mtime, tz=UTC)
     except OSError:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 def _derive_hosted_url(
@@ -241,7 +241,7 @@ def _parse_iso_date(value: str) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -332,7 +332,7 @@ class GalleryIndex:
 def _aware(dt: datetime) -> datetime:
     """Ensure a datetime is timezone-aware (assume UTC if naive)."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 

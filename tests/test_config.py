@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from unittest.mock import patch
 
-
 from mcp_bildsprache.config import Settings
 
 

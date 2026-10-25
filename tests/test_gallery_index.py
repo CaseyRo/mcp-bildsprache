@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from mcp_bildsprache.gallery.index import (
@@ -98,7 +98,7 @@ class TestScanIndex:
 
 
 def _build_index(tmp_path: Path) -> GalleryIndex:
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
 
     # Three entries across two brands, three platforms, varied costs/sizes.
     _write_entry(
@@ -271,7 +271,7 @@ class TestAttributionSchemaSidecars:
 
     def test_filename_with_collision_suffix_still_parses(self, tmp_path: Path):
         """Files named `...-1200x1200-0fae.webp` (with the SHA collision
-        suffix) were previously parsed as 0×0 because the naive
+        suffix) were previously parsed as 0x0 because the naive
         rsplit('-', 1) returned only the hex suffix."""
         d = tmp_path / "casey"
         d.mkdir()

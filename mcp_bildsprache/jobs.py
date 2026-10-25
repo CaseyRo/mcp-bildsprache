@@ -47,8 +47,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ class JobRegistry:
         event = self._events.setdefault(job_id, asyncio.Event())
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             pass
         return self._jobs.get(job_id)
 

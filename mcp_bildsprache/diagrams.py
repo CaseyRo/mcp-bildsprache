@@ -249,7 +249,7 @@ def _parse_flow(source: str, header_line: str) -> ParsedDiagram:
         elif label and not seen_nodes[node_id]:
             seen_nodes[node_id] = label
 
-    for raw_idx, raw in enumerate(source.splitlines(), start=1):
+    for raw in source.splitlines():
         line = raw.strip()
         if not line or line.startswith("%%"):
             continue
@@ -324,7 +324,7 @@ def _parse_sequence(source: str) -> ParsedDiagram:
         if name not in seen_participants:
             seen_participants.append(name)
 
-    for raw_idx, raw in enumerate(source.splitlines(), start=1):
+    for raw in source.splitlines():
         line = raw.strip()
         if not line or line.startswith("%%"):
             continue
@@ -392,7 +392,7 @@ def _parse_state(source: str) -> ParsedDiagram:
         if name not in seen_states:
             seen_states.append(name)
 
-    for raw_idx, raw in enumerate(source.splitlines(), start=1):
+    for raw in source.splitlines():
         line = raw.strip()
         if not line or line.startswith("%%"):
             continue
@@ -465,7 +465,7 @@ _PALETTE_CLAUSE: str = (
     "accent (≤5%) weathered ochre #B8884A, "
     "hairlines/rules soft moss #C7CFB8. "
     "Typography (when in-image text appears): Vollkorn-style serif, "
-    "italic + roman, weights 400–900. NO all-caps anywhere — use weight "
+    "italic + roman, weights 400–900. NO all-caps anywhere — use weight "  # noqa: RUF001 (prompt typography)
     "or italic for emphasis. "
     "Avoid: chrome, lens flare, neon, gradient mesh, generic AI aesthetic."
 )
@@ -623,6 +623,7 @@ def compose_render_brief(
 
 # Re-export palette for tests / direct callers.
 __all__ = [
+    "CASEY_PALETTE",
     "DiagramFormat",
     "DiagramRegister",
     "FlowEdge",
@@ -633,5 +634,4 @@ __all__ = [
     "StateTransition",
     "compose_render_brief",
     "parse_mermaid",
-    "CASEY_PALETTE",
 ]

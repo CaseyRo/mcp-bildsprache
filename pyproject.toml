@@ -46,3 +46,20 @@ dev = [
     "pytest-httpx>=0.34",
     "ruff>=0.8",
 ]
+
+[tool.ruff]
+# _shared/ mirrors CaseyRo/CDiT-marketingskills/shared/ byte-for-byte (drift is
+# checked in the monthly CDiT OS update); lint it upstream, not here.
+extend-exclude = ["mcp_bildsprache/_shared"]
+
+[tool.ruff.lint]
+# Pinned explicitly (CDI-1783) rather than inheriting ruff's defaults, which
+# widen between releases. A linter's rule set should be a decision.
+# BLE001 (blind `except Exception`) stays unselected: the defensive catches
+# around provider calls and the detached render are deliberate.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "RUF"]
+ignore = [
+    # UP042 wants StrEnum, which changes str() of enum values on the wire
+    # ("X.member" -> "member"). Fleet decision: no.
+    "UP042",
+]
