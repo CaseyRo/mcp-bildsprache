@@ -1039,7 +1039,7 @@ Choosing a tool:
 - `list_models` — active vs. disabled providers, their costs, and which
   identity packs are loaded.
 - `get_visual_presets` — brand visual DNA (palette, register overlays,
-  platform sizes). For voice/writing rules use klartext's get_brand_context.
+  platform sizes). For voice/writing rules use klartext's generate_text_context (or its klartext://brands/{brand} resource).
 
 Brand semantics (May 2026 brand collapse): active brands are `casey` (one
 voice, two registers — `personal` warmer/kitchen-table, `professional`
@@ -2173,7 +2173,7 @@ async def get_visual_presets(
     context: BrandContext | None = None,
     register: Register | None = None,
 ) -> VisualPresetsResult:
-    """[image] Get visual style presets for image generation. For voice/writing rules, use klartext's get_brand_context instead.
+    """[image] Get visual style presets for image generation. For voice/writing rules, use klartext's generate_text_context (or its klartext://brands/{brand} resource) instead.
 
     Active brands (May 2026 brand collapse): ``casey`` (with personal/professional
     registers), ``yorizon``. Legacy keys resolve to ``casey``.
