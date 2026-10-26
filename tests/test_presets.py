@@ -215,11 +215,11 @@ class TestCompositionClause:
 
 
 class TestPlatformSizes:
-    EXPECTED_KEYS = [
+    EXPECTED_KEYS = (
         "linkedin-post", "linkedin-article", "linkedin-carousel",
         "instagram-feed", "instagram-story", "blog-hero",
         "og-image", "proposal-cover", "icon", "email-header",
-    ]
+    )
 
     def test_platform_sizes_contains_expected_keys(self):
         for key in self.EXPECTED_KEYS:

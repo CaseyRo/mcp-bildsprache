@@ -6,19 +6,32 @@ import asyncio
 import io
 import logging
 import time
-from typing import Annotated, Any, Callable, Literal
+from collections.abc import Callable
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
+from mcp.types import Icon, ToolAnnotations
 from PIL import Image as PILImage
 from pydantic import BeforeValidator
-from mcp.types import Icon, ToolAnnotations
+from starlette.requests import Request as _SReq
+from starlette.responses import JSONResponse as _SResp
 
-from pathlib import Path
-
-from mcp_bildsprache.usage import UsageMiddleware
+from mcp_bildsprache import GIT_COMMIT
+from mcp_bildsprache import __version__ as _version
+from mcp_bildsprache import jobs as _jobs
+from mcp_bildsprache import ledger as _ledger
+from mcp_bildsprache.attribution import (
+    build_attribution,
+    estimate_cost_eur,
+    format_legacy_cost_estimate,
+    get_contract_state,
+    validate_shared_contract,
+)
 from mcp_bildsprache.auth import (
     BearerTokenVerifier,
     build_cf_access_verifier,
@@ -30,16 +43,29 @@ from mcp_bildsprache.identity import (
     get_loaded_packs,
     get_pack_for_context,
     load_identity_packs,
-    resolve_identity_for_call,
     people_hint,
+    resolve_identity_for_call,
     set_loaded_packs,
     spread_across_slots,
+)
+from mcp_bildsprache.models import (
+    EditImageResult,
+    EditRegion,
+    GenerateDiagramResult,
+    GenerateImageResult,
+    GeneratePromptResult,
+    GenerationStatsResult,
+    GetImageResult,
+    ModelsResult,
+    RecentGenerationsResult,
+    VisualPresetsResult,
 )
 from mcp_bildsprache.pipeline import process_image
 from mcp_bildsprache.presets import (
     CASEY_COMPOSITION_CLAUSE,
     CASEY_REGISTER_OVERLAYS,
     PLATFORM_SIZES,
+    PRESET_BUNDLES,
     PRESETS,
     get_dimensions,
     get_preset,
@@ -63,32 +89,12 @@ from mcp_bildsprache.storage import (
     store_image,
     store_raw_image,
 )
-from mcp_bildsprache.attribution import (
-    build_attribution,
-    estimate_cost_eur,
-    format_legacy_cost_estimate,
-    get_contract_state,
-    validate_shared_contract,
-)
-from mcp_bildsprache.models import (
-    EditImageResult,
-    EditRegion,
-    GenerateDiagramResult,
-    GenerateImageResult,
-    GeneratePromptResult,
-    GenerationStatsResult,
-    GetImageResult,
-    ModelsResult,
-    RecentGenerationsResult,
-    VisualPresetsResult,
-)
-from mcp_bildsprache import ledger as _ledger
-from mcp_bildsprache import jobs as _jobs
 from mcp_bildsprache.types import (
     IdentityPack,
     ProviderResult,
     ProviderTemporarilyDisabled,
 )
+from mcp_bildsprache.usage import UsageMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +150,8 @@ Platform = Literal[
     "icon",
     "email-header",
 ]
+# "<register>/<platform>" shortcuts (CDI-1917); enumerated so the schema lists them.
+PresetBundle = Literal[tuple(PRESET_BUNDLES)]  # type: ignore[valid-type]
 
 PROVIDERS = {
     "gemini": generate_gemini,
@@ -862,8 +870,9 @@ async def _dispatch_and_maybe_wait(
     Returns:
         * the full result dict if the render finished within the wait budget
           (fast path → backward-compatible synchronous response), or
-        * ``{job_id, status: "pending", poll_with: "get_image_result"}`` if it
-          didn't finish in time (slow path → caller polls).
+        * ``{job_id, status: "pending", poll_with: {tool: "get_image_result",
+          wait_seconds}}`` if it didn't finish in time (slow path → caller
+          long-polls; ``wait_seconds`` is the get_image_result ceiling).
 
     Raises:
         Whatever the render coroutine raised, IF it failed within the inline-wait
@@ -882,7 +891,10 @@ async def _dispatch_and_maybe_wait(
         return {
             "job_id": job_id,
             "status": "pending",
-            "poll_with": "get_image_result",
+            "poll_with": {
+                "tool": "get_image_result",
+                "wait_seconds": int(settings.poll_wait_max_seconds),
+            },
             "model": model,
             "brand_context": brand,
             "dimensions": dimensions,
@@ -1084,13 +1096,7 @@ mcp.add_middleware(_DropRetiredArgs())
 
 
 # --- Health endpoint -----------------------------------------------------
-from datetime import datetime, timezone as _tz  # noqa: E402
-from starlette.requests import Request as _SReq  # noqa: E402
-from starlette.responses import JSONResponse as _SResp  # noqa: E402
-
-from mcp_bildsprache import GIT_COMMIT, __version__ as _version  # noqa: E402
-
-_start_time = datetime.now(_tz.utc)
+_start_time = datetime.now(UTC)
 
 
 # Fail-fast: load the ai_attribution schema + provider cost table at import
@@ -1113,7 +1119,7 @@ async def _health_check(request: _SReq) -> _SResp:
         "version": _version,
         "git_commit": GIT_COMMIT,
         "upstream_reachable": True,
-        "uptime_seconds": int((datetime.now(_tz.utc) - _start_time).total_seconds()),
+        "uptime_seconds": int((datetime.now(UTC) - _start_time).total_seconds()),
         "attribution": {
             "schema_version": contract["schema_version"],
             "cost_table_version": contract["cost_table_version"],
@@ -1141,6 +1147,7 @@ async def generate_image(
     prompt: str,
     context: BrandContext | None = None,
     register: Register | None = None,
+    presets: PresetBundle | None = None,
     model: Model | None = None,
     platform: Platform | None = None,
     dimensions: str | None = None,
@@ -1165,11 +1172,11 @@ async def generate_image(
       response_mode: "url", ...}``.
     * **Job handle** (slow path) — when the render does NOT finish in time (most
       gpt-image-2 / Nano-Banana-Pro renders take 50-80s), you get
-      ``{job_id, status: "pending", poll_with: "get_image_result", model,
-      brand_context, dimensions}`` immediately. The render KEEPS RUNNING
-      server-side; call ``get_image_result(job_id)`` (optionally with
-      ``wait_seconds`` to long-poll) to retrieve the ``hosted_url`` once it
-      completes. This avoids the portal severing a slow synchronous response
+      ``{job_id, status: "pending", poll_with: {tool: "get_image_result",
+      wait_seconds}, model, brand_context, dimensions}`` immediately. The render
+      KEEPS RUNNING server-side; call ``get_image_result(job_id=...,
+      wait_seconds=poll_with.wait_seconds)`` and repeat while ``status`` is
+      ``pending`` to retrieve the ``hosted_url`` once it completes. This avoids the portal severing a slow synchronous response
       with ``-32001`` even though the image was produced.
 
     Always inspect ``status`` / the presence of ``job_id``: if you got a job
@@ -1194,6 +1201,11 @@ async def generate_image(
                   manifesto-adjacent) or ``professional`` (verification,
                   workshop voice). Defaults to ``professional`` for casey
                   when omitted.
+        presets: Shortcut ``"<register>/<platform>"`` (e.g.
+                ``"professional/linkedin-post"``): sets ``context='casey'``,
+                ``register`` and ``platform`` in one value, so no
+                ``get_visual_presets`` call is needed first. Explicit
+                ``context`` / ``register`` / ``platform`` win over the bundle.
         model: Force a provider/model (always wins). OpenAI: ``gpt-image-2``,
                 ``gpt-image-2.5-flare`` (fast everyday), ``gpt-image-2.5-sunburst``
                 (premium, editing precision); ``openai`` = the server default split.
@@ -1226,6 +1238,12 @@ async def generate_image(
         transparent: OpenAI 2.5 models only: render on a transparent
                 background (kept as WebP alpha).
     """
+    if presets:
+        bundle_register, bundle_platform = PRESET_BUNDLES[presets]
+        context = context or "casey"
+        register = register or bundle_register
+        platform = platform or bundle_platform
+
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
     # ------------------------------------------------------------------
@@ -1300,7 +1318,7 @@ async def generate_image(
             parts = dimensions.lower().replace(" ", "").split("x")
             w, h = int(parts[0]), int(parts[1])
         except (ValueError, IndexError):
-            raise ToolError(f"Invalid dimensions '{dimensions}'. Use 'WxH' format, e.g. '1200x630'.")
+            raise ToolError(f"Invalid dimensions '{dimensions}'. Use 'WxH' format, e.g. '1200x630'.") from None
     elif platform:
         w, h = get_dimensions(platform)
     else:
@@ -1430,8 +1448,9 @@ async def generate_diagram(
     Response shape is the same UNION as ``generate_image`` (CDI-1266): a fast
     render returns the hosted diagram inline; a slow one (Nano Banana Pro 4K can
     exceed the ~60s portal budget) returns ``{job_id, status: "pending",
-    poll_with: "get_image_result"}`` while the render continues server-side. Poll
-    ``get_image_result(job_id)`` for the eventual ``hosted_url``. Pass
+    poll_with: {tool: "get_image_result", wait_seconds}}`` while the render
+    continues server-side. Long-poll ``get_image_result(job_id, wait_seconds)``
+    for the eventual ``hosted_url``. Pass
     ``background=True`` to skip the inline wait and get the job handle immediately.
 
     Exactly one of ``prompt`` or ``mermaid`` must be provided.
@@ -1516,7 +1535,7 @@ async def generate_diagram(
             raise ToolError(
                 f"INVALID_DIMENSIONS: Invalid dimensions {dimensions!r}. Use 'WxH' "
                 "(e.g. '1600x900')."
-            )
+            ) from None
     elif format == "sequence":
         w, h = 1200, 1600
     else:
@@ -1611,7 +1630,8 @@ async def edit_image(
 
     Response shape is the same UNION as ``generate_image``: the hosted edit
     inline when it finishes within {sync_wait}s, otherwise ``{job_id, status:
-    "pending", poll_with: "get_image_result"}`` while the edit keeps running.
+    "pending", poll_with: {tool: "get_image_result", wait_seconds}}`` while the
+    edit keeps running.
 
     Args:
         image: The image to edit. A Bildsprache ``hosted_url`` or its storage
@@ -1660,7 +1680,7 @@ async def edit_image(
             d_parts = dimensions.lower().replace(" ", "").split("x")
             w, h = int(d_parts[0]), int(d_parts[1])
         except (ValueError, IndexError):
-            raise ToolError(f"INVALID_DIMENSIONS: {dimensions!r}. Use 'WxH', e.g. '1600x900'.")
+            raise ToolError(f"INVALID_DIMENSIONS: {dimensions!r}. Use 'WxH', e.g. '1600x900'.") from None
         if w <= 0 or h <= 0:
             raise ToolError(f"INVALID_DIMENSIONS: {dimensions!r} must be positive.")
         size: tuple[int, int] | None = (w, h)
@@ -1849,7 +1869,7 @@ async def list_models() -> ModelsResult:
                 "Nano Banana 2.1 leads: Google rates it best on character "
                 "consistency; identity scenes get at most 4 person/dog refs."
             ),
-            "cost": "~$0.067/image (flash) – ~$0.24/image (Pro, 4K)",
+            "cost": "~$0.067/image (flash) – ~$0.24/image (Pro, 4K)",  # noqa: RUF001 (typography)
             "status": "available",
         })
 
@@ -2261,7 +2281,7 @@ def resource_status() -> dict:
         "version": _version,
         "status": "healthy" if contract["healthy"] else "degraded",
         "uptime_seconds": int(
-            (datetime.now(_tz.utc) - _start_time).total_seconds()
+            (datetime.now(UTC) - _start_time).total_seconds()
         ),
         "attribution": {
             "schema_version": contract["schema_version"],

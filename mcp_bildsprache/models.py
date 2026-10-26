@@ -14,7 +14,7 @@ Unset optional fields now go out as explicit ``null``.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -31,51 +31,51 @@ class GenerateImageResult(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    hosted_url: Optional[str] = Field(
+    hosted_url: str | None = Field(
         default=None,
         description="Public URL of the processed WebP image, or omitted on a pending job handle.",
     )
-    model: Optional[str] = Field(
+    model: str | None = Field(
         default=None, description="Provider model id that produced the image (e.g. 'gpt-image-2')."
     )
-    model_reason: Optional[str] = Field(
+    model_reason: str | None = Field(
         default=None,
         description="Why this model: explicit model, OPENAI_IMAGE_MODEL, identity scene, or flare default.",
     )
-    cost_estimate: Optional[str] = Field(
+    cost_estimate: str | None = Field(
         default=None, description="Human display cost derived from ai_attribution (e.g. '€0.0490')."
     )
-    brand_context: Optional[str] = Field(
+    brand_context: str | None = Field(
         default=None, description="Brand context applied, if any (e.g. 'casey')."
     )
-    platform: Optional[str] = Field(default=None, description="Target platform, if supplied.")
-    dimensions: Optional[str] = Field(default=None, description="Final image dimensions as 'WxH'.")
-    response_mode: Optional[str] = Field(
+    platform: str | None = Field(default=None, description="Target platform, if supplied.")
+    dimensions: str | None = Field(default=None, description="Final image dimensions as 'WxH'.")
+    response_mode: str | None = Field(
         default=None, description="Always 'url' on success (the image is hosted, not inlined)."
     )
-    ai_attribution: Optional[dict[str, Any]] = Field(
+    ai_attribution: dict[str, Any] | None = Field(
         default=None, description="ai_attribution v1 payload: provider, cost (EUR), provenance, prompt_hash."
     )
-    raw_url: Optional[str] = Field(
+    raw_url: str | None = Field(
         default=None, description="URL of the unprocessed provider image (only when raw=True)."
     )
-    raw_mime_type: Optional[str] = Field(
+    raw_mime_type: str | None = Field(
         default=None, description="MIME type of the raw image (only when raw=True)."
     )
-    fallback_used: Optional[bool] = Field(
+    fallback_used: bool | None = Field(
         default=None, description="True when a cross-provider fallback produced the image."
     )
-    intended_provider: Optional[str] = Field(
+    intended_provider: str | None = Field(
         default=None, description="Provider originally selected, when a fallback fired."
     )
-    fallback_reason: Optional[str] = Field(
+    fallback_reason: str | None = Field(
         default=None, description="Why the fallback fired (e.g. 'provider_error')."
     )
-    cancelled: Optional[bool] = Field(
+    cancelled: bool | None = Field(
         default=None,
         description="True when the user declined/cancelled the cost-confirmation prompt; no provider call was made and no artifact was written.",
     )
-    estimated_cost_eur: Optional[float] = Field(
+    estimated_cost_eur: float | None = Field(
         default=None,
         description="Estimated EUR cost surfaced in the cost-confirmation prompt (only present when the user cancelled).",
     )
@@ -93,29 +93,29 @@ class GenerateDiagramResult(BaseModel):
     # bare attribute name). ``serialize_by_alias`` keeps ``register`` on the wire.
     model_config = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
 
-    hosted_url: Optional[str] = Field(
+    hosted_url: str | None = Field(
         default=None, description="Public URL of the processed diagram WebP, or omitted on a pending job handle."
     )
-    model: Optional[str] = Field(default=None, description="Provider model id that produced the diagram.")
-    cost_estimate: Optional[str] = Field(default=None, description="Human display cost derived from ai_attribution.")
-    brand_context: Optional[str] = Field(default=None, description="Always 'casey' for diagrams.")
-    register_: Optional[str] = Field(
+    model: str | None = Field(default=None, description="Provider model id that produced the diagram.")
+    cost_estimate: str | None = Field(default=None, description="Human display cost derived from ai_attribution.")
+    brand_context: str | None = Field(default=None, description="Always 'casey' for diagrams.")
+    register_: str | None = Field(
         default=None, alias="register", description="'personal' or 'professional'."
     )
-    format: Optional[str] = Field(default=None, description="Diagram format: 'flow', 'sequence', or 'state'.")
-    dimensions: Optional[str] = Field(default=None, description="Final diagram dimensions as 'WxH'.")
-    response_mode: Optional[str] = Field(default=None, description="Always 'url' on success.")
-    ai_attribution: Optional[dict[str, Any]] = Field(
+    format: str | None = Field(default=None, description="Diagram format: 'flow', 'sequence', or 'state'.")
+    dimensions: str | None = Field(default=None, description="Final diagram dimensions as 'WxH'.")
+    response_mode: str | None = Field(default=None, description="Always 'url' on success.")
+    ai_attribution: dict[str, Any] | None = Field(
         default=None, description="ai_attribution v1 payload for the diagram."
     )
-    fallback_used: Optional[bool] = Field(default=None, description="True when a cross-provider fallback fired.")
-    intended_provider: Optional[str] = Field(default=None, description="Provider originally selected, on fallback.")
-    fallback_reason: Optional[str] = Field(default=None, description="Why the fallback fired.")
-    cancelled: Optional[bool] = Field(
+    fallback_used: bool | None = Field(default=None, description="True when a cross-provider fallback fired.")
+    intended_provider: str | None = Field(default=None, description="Provider originally selected, on fallback.")
+    fallback_reason: str | None = Field(default=None, description="Why the fallback fired.")
+    cancelled: bool | None = Field(
         default=None,
         description="True when the user declined/cancelled the cost-confirmation prompt; no provider call was made and no artifact was written.",
     )
-    estimated_cost_eur: Optional[float] = Field(
+    estimated_cost_eur: float | None = Field(
         default=None,
         description="Estimated EUR cost surfaced in the cost-confirmation prompt (only present when the user cancelled).",
     )
@@ -146,7 +146,7 @@ class EditRegion(BaseModel):
         description="edit/add: render something new in the box; keep: leave this element exactly as is; "
         "move: move the element in `box` to `to`.",
     )
-    to: Optional[list[int]] = Field(default=None, description="Target box for kind='move'.")
+    to: list[int] | None = Field(default=None, description="Target box for kind='move'.")
 
     @field_validator("box")
     @classmethod
@@ -159,7 +159,7 @@ class EditRegion(BaseModel):
         return None if v is None else _check_box(v)
 
     @model_validator(mode="after")
-    def _move_needs_to(self) -> "EditRegion":
+    def _move_needs_to(self) -> EditRegion:
         if (self.kind == "move") != (self.to is not None):
             raise ValueError("`to` is required for kind='move' and only allowed there")
         return self
@@ -174,23 +174,23 @@ class EditImageResult(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    hosted_url: Optional[str] = Field(
+    hosted_url: str | None = Field(
         default=None, description="Public URL of the edited WebP, or omitted on a pending job handle."
     )
-    source_image: Optional[str] = Field(default=None, description="The image that was edited.")
-    model: Optional[str] = Field(default=None, description="Always 'flux-3-image'.")
-    cost_estimate: Optional[str] = Field(default=None, description="Human display cost (e.g. '€0.0442').")
-    brand_context: Optional[str] = Field(default=None, description="Brand directory the edit is stored under.")
-    dimensions: Optional[str] = Field(default=None, description="Final image dimensions as 'WxH'.")
-    response_mode: Optional[str] = Field(default=None, description="Always 'url' on success.")
-    ai_attribution: Optional[dict[str, Any]] = Field(
+    source_image: str | None = Field(default=None, description="The image that was edited.")
+    model: str | None = Field(default=None, description="Always 'flux-3-image'.")
+    cost_estimate: str | None = Field(default=None, description="Human display cost (e.g. '€0.0442').")
+    brand_context: str | None = Field(default=None, description="Brand directory the edit is stored under.")
+    dimensions: str | None = Field(default=None, description="Final image dimensions as 'WxH'.")
+    response_mode: str | None = Field(default=None, description="Always 'url' on success.")
+    ai_attribution: dict[str, Any] | None = Field(
         default=None, description="ai_attribution v1 payload; the source image is listed under sources."
     )
-    cancelled: Optional[bool] = Field(
+    cancelled: bool | None = Field(
         default=None,
         description="True when the user declined the cost-confirmation prompt; nothing was rendered.",
     )
-    estimated_cost_eur: Optional[float] = Field(
+    estimated_cost_eur: float | None = Field(
         default=None, description="Estimated EUR cost (only present when the user cancelled)."
     )
 
@@ -200,16 +200,16 @@ class GeneratePromptResult(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
 
-    engineered_prompt: Optional[str] = Field(
+    engineered_prompt: str | None = Field(
         default=None, description="The brand-injected prompt that would be sent to the provider."
     )
-    model: Optional[str] = Field(default=None, description="Provider key the prompt would route to ('openai'/'gemini').")
-    dimensions: Optional[str] = Field(default=None, description="Recommended dimensions as 'WxH'.")
-    brand_context: Optional[str] = Field(default=None, description="Brand context applied, if any.")
-    register_: Optional[str] = Field(
+    model: str | None = Field(default=None, description="Provider key the prompt would route to ('openai'/'gemini').")
+    dimensions: str | None = Field(default=None, description="Recommended dimensions as 'WxH'.")
+    brand_context: str | None = Field(default=None, description="Brand context applied, if any.")
+    register_: str | None = Field(
         default=None, alias="register", description="Register applied, if any."
     )
-    platform: Optional[str] = Field(default=None, description="Platform supplied, if any.")
+    platform: str | None = Field(default=None, description="Platform supplied, if any.")
 
 
 class GetImageResult(BaseModel):
@@ -234,26 +234,26 @@ class GetImageResult(BaseModel):
 
     job_id: str = Field(description="The polled job id (== the generation request_id).")
     status: str = Field(description="One of: pending | done | error | not_found.")
-    hosted_url: Optional[str] = Field(
+    hosted_url: str | None = Field(
         default=None, description="Public WebP URL — present when status == 'done'."
     )
-    model: Optional[str] = Field(default=None, description="Provider model id, when known.")
-    brand_context: Optional[str] = Field(default=None, description="Brand context, when known.")
-    dimensions: Optional[str] = Field(default=None, description="Image dimensions as 'WxH', when known.")
-    latency_ms: Optional[int] = Field(
+    model: str | None = Field(default=None, description="Provider model id, when known.")
+    brand_context: str | None = Field(default=None, description="Brand context, when known.")
+    dimensions: str | None = Field(default=None, description="Image dimensions as 'WxH', when known.")
+    latency_ms: int | None = Field(
         default=None, description="Dispatch→completion latency in ms (done/error)."
     )
-    error: Optional[Any] = Field(
+    error: Any | None = Field(
         default=None, description="Error message string when status == 'error'."
     )
-    error_category: Optional[str] = Field(
+    error_category: str | None = Field(
         default=None, description="Exception class name when status == 'error'."
     )
-    source: Optional[str] = Field(
+    source: str | None = Field(
         default=None,
         description="Where the result was resolved from: 'registry' | 'ledger' (durable fallback).",
     )
-    ai_attribution: Optional[dict[str, Any]] = Field(
+    ai_attribution: dict[str, Any] | None = Field(
         default=None, description="ai_attribution payload, spread in when status == 'done'."
     )
 
@@ -278,7 +278,7 @@ class RecentGeneration(BaseModel):
     cost_estimate: str = Field(default="", description="Stored cost estimate string for the generation.")
     width: int = Field(default=0, description="Image width in pixels (0 when unknown).")
     height: int = Field(default=0, description="Image height in pixels (0 when unknown).")
-    platform: Optional[str] = Field(default=None, description="Target platform stored at generation time, if any.")
+    platform: str | None = Field(default=None, description="Target platform stored at generation time, if any.")
     file_size: int = Field(default=0, description="File size of the WebP in bytes (0 when unknown).")
     created_at: str = Field(description="ISO-8601 timestamp the artifact was generated (or file mtime fallback).")
 
@@ -302,7 +302,7 @@ class RecentGenerationsResult(BaseModel):
     returned: int = Field(default=0, description="Number of entries in this page (len of generations).")
     limit: int = Field(default=0, description="Effective page size applied (after clamping).")
     offset: int = Field(default=0, description="Offset applied into the filtered set.")
-    brand: Optional[str] = Field(default=None, description="Brand filter applied, if any.")
+    brand: str | None = Field(default=None, description="Brand filter applied, if any.")
 
 
 class ModelStat(BaseModel):
@@ -358,9 +358,9 @@ class ProviderInfo(BaseModel):
     id: str = Field(description="Provider key ('openai' / 'gemini').")
     name: str = Field(description="Human-readable provider/model name.")
     models: list[str] = Field(default_factory=list, description="Concrete model ids this provider can run.")
-    best_for: Optional[str] = Field(default=None, description="When to prefer this provider.")
-    cost: Optional[str] = Field(default=None, description="Rough per-image cost band.")
-    status: Optional[str] = Field(default=None, description="Availability status (e.g. 'available').")
+    best_for: str | None = Field(default=None, description="When to prefer this provider.")
+    cost: str | None = Field(default=None, description="Rough per-image cost band.")
+    status: str | None = Field(default=None, description="Availability status (e.g. 'available').")
 
 
 class ModelsResult(BaseModel):
@@ -396,23 +396,23 @@ class VisualPresetsResult(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True, serialize_by_alias=True)
 
-    context: Optional[str] = Field(default=None, description="Brand context requested (single-context shape).")
-    register_: Optional[str] = Field(
+    context: str | None = Field(default=None, description="Brand context requested (single-context shape).")
+    register_: str | None = Field(
         default=None, alias="register", description="Register requested (single-context shape)."
     )
-    preset: Optional[str] = Field(default=None, description="Resolved preset text (single-context shape).")
-    identity_pack_loaded: Optional[bool] = Field(
+    preset: str | None = Field(default=None, description="Resolved preset text (single-context shape).")
+    identity_pack_loaded: bool | None = Field(
         default=None, description="Whether an identity pack is loaded for the context (single-context shape)."
     )
-    presets: Optional[dict[str, str]] = Field(
+    presets: dict[str, str] | None = Field(
         default=None, description="All brand presets (all-presets shape)."
     )
-    casey_register_overlays: Optional[dict[str, str]] = Field(
+    casey_register_overlays: dict[str, str] | None = Field(
         default=None, description="Casey personal/professional register overlays (all-presets shape)."
     )
-    platforms: Optional[dict[str, Any]] = Field(
+    platforms: dict[str, Any] | None = Field(
         default=None, description="Platform -> (width, height) sizing table (all-presets shape)."
     )
-    identity_packs: Optional[dict[str, bool]] = Field(
+    identity_packs: dict[str, bool] | None = Field(
         default=None, description="Brand -> loaded flag (all-presets shape)."
     )

@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
@@ -242,7 +242,7 @@ def build_attribution(
         "prompt_anchor": prompt_anchor,
         "prompt_hash": _prompt_hash(effective),
         "sources": sources or [],
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "provenance": _build_provenance(provider, provider_result),
     }
 

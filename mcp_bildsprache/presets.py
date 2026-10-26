@@ -65,7 +65,7 @@ def _casey_palette_clause() -> str:
 
 _CASEY_TYPOGRAPHY_CLAUSE: str = (
     "Typography (when in-image text appears): Vollkorn-style serif, "
-    "italic + roman, weights 400–900. Hierarchy via weight + size, never "
+    "italic + roman, weights 400–900. Hierarchy via weight + size, never "  # noqa: RUF001 (prompt typography)
     "via optical-size axis. NO all-caps anywhere — use weight or italic "
     "for emphasis."
 )
@@ -204,6 +204,15 @@ PLATFORM_SIZES: dict[str, tuple[int, int]] = {
     "proposal-cover": (2480, 3508),
     "icon": (512, 512),
     "email-header": (600, 200),
+}
+
+# CDI-1917: generate_image(presets="<register>/<platform>") bundles, built from
+# the same tables get_visual_presets serves, so a caller can pick register +
+# platform in one enum value instead of reading the presets first.
+PRESET_BUNDLES: dict[str, tuple[str, str]] = {
+    f"{register}/{platform}": (register, platform)
+    for register in CASEY_REGISTER_OVERLAYS
+    for platform in PLATFORM_SIZES
 }
 
 

@@ -69,6 +69,33 @@ async def test_generate_image_surface_drops_dead_hints():
 
 
 @pytest.mark.asyncio
+async def test_generate_image_lists_every_preset_bundle():
+    # CDI-1917: the bundles must be enumerated in the schema, or the LLM is back
+    # to calling get_visual_presets first.
+    from mcp_bildsprache.presets import PRESET_BUNDLES
+
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    enum = tools["generate_image"].input_schema["properties"]["presets"]["anyOf"][0]["enum"]
+    assert set(enum) == set(PRESET_BUNDLES)
+    assert "professional/linkedin-post" in enum
+
+
+@pytest.mark.asyncio
+async def test_unknown_preset_bundle_is_rejected_before_any_provider():
+    from unittest.mock import AsyncMock, patch
+
+    boom = AsyncMock(side_effect=AssertionError("provider must not be called"))
+    with patch("mcp_bildsprache.server.PROVIDERS", {"openai": boom, "gemini": boom}):
+        async with Client(mcp) as client:
+            result = await client.call_tool(
+                "generate_image", {"prompt": "x", "presets": "casual/tiktok"}, raise_on_error=False
+            )
+    assert result.is_error
+    boom.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_stale_portal_args_are_ignored_not_rejected():
     # A stale portal catalog may still send draft / a retired model hint. They
     # must get past validation; bad dimensions then stop the call before any

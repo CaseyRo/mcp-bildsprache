@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -49,12 +49,12 @@ def _seed(tmp_path: Path) -> Path:
     _write_sidecar(
         tmp_path, "cdit", "forest", 1200, 630,
         prompt="forest", platform="og-image",
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
     )
     _write_sidecar(
         tmp_path, "casey-berlin", "walk", 1200, 1200,
         prompt="morning walk",
-        created_at=datetime(2026, 1, 10, tzinfo=timezone.utc).isoformat(),
+        created_at=datetime(2026, 1, 10, tzinfo=UTC).isoformat(),
     )
     return tmp_path
 
@@ -138,7 +138,7 @@ class TestGalleryAPI:
             _write_sidecar(
                 tmp_path, "cdit", "newone", 100, 100,
                 prompt="brand new",
-                created_at=datetime(2026, 2, 1, tzinfo=timezone.utc).isoformat(),
+                created_at=datetime(2026, 2, 1, tzinfo=UTC).isoformat(),
             )
 
             # Reindex and confirm it's visible.
@@ -306,6 +306,7 @@ class TestMountGalleryFires:
         ASGI lifespan protocol, and assert that the reindex task starts.
         """
         import asyncio
+
         from starlette.applications import Starlette
 
         from mcp_bildsprache.config import settings

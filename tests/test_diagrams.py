@@ -14,7 +14,6 @@ from mcp_bildsprache.diagrams import (
     parse_mermaid,
 )
 
-
 # ---------------------------------------------------------------------------
 # parse_mermaid — header detection + rejection
 # ---------------------------------------------------------------------------

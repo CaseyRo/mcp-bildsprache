@@ -384,7 +384,7 @@ async def _post_with_backoff(
     about (otherwise the default raise_for_status() strips the body).
     """
     delays = (1.0, 4.0, 10.0)
-    for attempt, delay in enumerate(delays + (None,)):  # type: ignore[operator]
+    for attempt, delay in enumerate((*delays, None)):
         response = await client.post(OPENAI_IMAGES_URL, json=payload, headers=headers)
         if response.status_code != 429:
             _raise_for_status_with_body(response)
@@ -421,7 +421,7 @@ async def _post_multipart_with_backoff(
     both shapes in the `files=` kwarg.
     """
     delays = (1.0, 4.0, 10.0)
-    for attempt, delay in enumerate(delays + (None,)):  # type: ignore[operator]
+    for attempt, delay in enumerate((*delays, None)):
         response = await client.post(url, files=files, headers=headers)
         if response.status_code != 429:
             _raise_for_status_with_body(response)

@@ -22,7 +22,6 @@ from mcp_bildsprache.providers.openai import (
     generate_openai,
 )
 
-
 TINY_WEBP = base64.b64encode(b"fake-image-bytes").decode("ascii")
 
 
@@ -44,8 +43,9 @@ def _response_body(revised_prompt: str | None = None, usage: dict | None = None)
 
 @pytest.fixture(autouse=True)
 def _set_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    from mcp_bildsprache.config import settings
     from pydantic import SecretStr
+
+    from mcp_bildsprache.config import settings
 
     monkeypatch.setattr(settings, "openai_api_key", SecretStr("sk-test-key"))
 
@@ -105,8 +105,9 @@ class TestParamGuards:
             await generate_openai("x", stream=True)
 
     async def test_missing_api_key_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from mcp_bildsprache.config import settings
         from pydantic import SecretStr
+
+        from mcp_bildsprache.config import settings
 
         monkeypatch.setattr(settings, "openai_api_key", SecretStr(""))
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):

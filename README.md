@@ -64,7 +64,7 @@ Stdio mode has no auth. HTTP mode refuses to start without `MCP_BILDSPRACHE_API_
 
 | Tool | What it does |
 | --- | --- |
-| `generate_image` | Render an image with the brand preset for `context`, sized for `platform` or explicit `dimensions`. Optional `model`, `quality`, `transparent`, `register`, `reference_images`, `raw`, `background`. Returns a result or a job handle. |
+| `generate_image` | Render an image with the brand preset for `context`, sized for `platform` or explicit `dimensions`. Optional `model`, `quality`, `transparent`, `register`, `presets` (`"<register>/<platform>"` shortcut, e.g. `professional/blog-hero`), `reference_images`, `raw`, `background`. Returns a result or a job handle. |
 | `generate_diagram` | Render a flow, sequence or state diagram from `prompt` or `mermaid` source. Gemini by default, OpenAI with `model_hint="openai"`. Returns a result or a job handle. |
 | `edit_image` | Change one thing in an existing image and keep the rest, with FLUX 3. Takes a stored image (`hosted_url` or storage path) or any https URL, an `instruction`, and optional bounding-box `regions` on a 0-1000 grid. Stores the edit as a new image; returns a result or a job handle. |
 | `get_image_result` | Fetch or long-poll the result of a pending render by `job_id`. Reads local state only. |
@@ -83,7 +83,7 @@ Providers: OpenAI (gpt-image-2 and the gpt-image-2.5 models) for raster, Gemini 
 Some renders take 50 to 80 seconds, longer than many proxies hold a request open. `generate_image` and `generate_diagram` therefore start the render in the background and wait up to `SYNC_WAIT_SECONDS` (20 s):
 
 1. A render that finishes in time returns its result inline, including `hosted_url`.
-2. A slower one returns `{job_id, status: "pending", poll_with: "get_image_result"}` while the render continues.
+2. A slower one returns `{job_id, status: "pending", poll_with: {tool: "get_image_result", wait_seconds: 20}}` while the render continues.
 3. Call `get_image_result(job_id, wait_seconds=20)` until `status` is `done` (with `hosted_url`) or `error`. Unknown ids return `not_found`.
 
 Pass `background=true` to always get the job handle immediately. Results are also written to a durable ledger, so a `job_id` still resolves after a restart.
