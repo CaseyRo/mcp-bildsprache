@@ -39,6 +39,7 @@ def make_slug(
     width: int,
     height: int,
     brand_context: str | None = None,
+    ext: str = "webp",
 ) -> tuple[str, str]:
     """Generate a brand-prefixed slug for an image URL.
 
@@ -50,7 +51,7 @@ def make_slug(
     prompt_slug = slugify(prompt, max_length=MAX_SLUG_LENGTH)
     if not prompt_slug:
         prompt_slug = "image"
-    filename = f"{prompt_slug}-{width}x{height}.webp"
+    filename = f"{prompt_slug}-{width}x{height}.{ext}"
     return brand_prefix, filename
 
 

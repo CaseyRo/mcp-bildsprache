@@ -370,3 +370,75 @@ def test_gpt_image_25_priced_like_gpt_image_2(model):
     assert model in _get_cost_table()["openai"]
     base = estimate_cost_eur(provider="openai", model="gpt-image-2", width=1024, height=1024)
     assert estimate_cost_eur(provider="openai", model=model, width=1024, height=1024) == base
+
+
+class TestGifSvgCost:
+    """COS-21: GIF tokens bill like image tokens; SVG adds the author's text-model tokens."""
+
+    @staticmethod
+    def _fx() -> float:
+        from mcp_bildsprache.attribution import _get_cost_table
+
+        return float(_get_cost_table()["fx"]["usd_eur"])
+
+    @staticmethod
+    def _svg_result(**svg_usage) -> ProviderResult:
+        return ProviderResult(
+            image_data=b"<svg/>",
+            mime_type="image/svg+xml",
+            model="gpt-image-2.6-flare",
+            cost_estimate="$0.03",
+            usage={"input_tokens": 100, "output_tokens": 1000, "svg_usage": {"model": "gpt-5.5", **svg_usage}},
+        )
+
+    def test_gif_tokens_priced_as_image_tokens(self) -> None:
+        r = ProviderResult(
+            image_data=b"GIF89a", mime_type="image/gif", model="gpt-image-2.6-flare",
+            cost_estimate="$0.06", usage={"input_tokens": 80, "output_tokens": 2073},
+        )
+        cost = build_attribution(provider_result=r, prompt_anchor="fern")["cost"]
+        usd = 80 * 8.0 / 1e6 + 2073 * 30.0 / 1e6
+        assert cost["source_amount"] == pytest.approx(usd, abs=1e-6)
+        assert cost["amount_eur"] == pytest.approx(usd * self._fx(), abs=1e-6)
+
+    def test_svg_adds_author_tokens(self) -> None:
+        r = self._svg_result(input_tokens=2000, output_tokens=8000, reasoning_tokens=3000, total_tokens=10000)
+        payload = build_attribution(provider_result=r, prompt_anchor="caravan")
+        cost = payload["cost"]
+        image_usd = 100 * 8.0 / 1e6 + 1000 * 30.0 / 1e6
+        svg_usd = 2000 * 5.0 / 1e6 + 8000 * 30.0 / 1e6
+        assert cost["breakdown_usd"]["svg_input"] == pytest.approx(0.01)
+        assert cost["breakdown_usd"]["svg_output"] == pytest.approx(0.24)
+        assert cost["source_amount"] == pytest.approx(image_usd + svg_usd, abs=1e-6)
+        assert cost["amount_eur"] == pytest.approx((image_usd + svg_usd) * self._fx(), abs=1e-5)
+        assert sum(cost["breakdown_usd"].values()) == pytest.approx(cost["source_amount"], abs=1e-5)
+        breakdown = payload["tokens"]["breakdown"]
+        assert (breakdown["svg_input"], breakdown["svg_output"], breakdown["svg_reasoning"]) == (2000, 8000, 3000)
+
+    def test_reasoning_outside_output_is_billed_once(self) -> None:
+        # total = input + output + reasoning: reasoning was not in output_tokens.
+        r = self._svg_result(input_tokens=2000, output_tokens=8000, reasoning_tokens=3000, total_tokens=13000)
+        cost = build_attribution(provider_result=r, prompt_anchor="caravan")["cost"]
+        assert cost["breakdown_usd"]["svg_output"] == pytest.approx(11000 * 30.0 / 1e6)
+
+    def test_dated_author_snapshot_uses_base_row(self) -> None:
+        r = self._svg_result(input_tokens=1000, output_tokens=1000, total_tokens=2000)
+        r.usage["svg_usage"]["model"] = "gpt-5.5-2026-10-01"
+        cost = build_attribution(provider_result=r, prompt_anchor="x")["cost"]
+        assert cost["breakdown_usd"]["svg_output"] == pytest.approx(0.03)
+
+    def test_unknown_author_leaves_image_cost(self, caplog) -> None:
+        r = self._svg_result(input_tokens=1000, output_tokens=1000, total_tokens=2000)
+        r.usage["svg_usage"]["model"] = "no-such-model"
+        cost = build_attribution(provider_result=r, prompt_anchor="x")["cost"]
+        assert "svg_output" not in cost["breakdown_usd"]
+        assert cost["source_amount"] == pytest.approx(100 * 8.0 / 1e6 + 1000 * 30.0 / 1e6, abs=1e-6)
+        assert "not in the cost table" in caplog.text
+
+    def test_svg_payload_validates_against_schema(self) -> None:
+        import jsonschema
+
+        from mcp_bildsprache.attribution import _get_schema
+
+        r = self._svg_result(input_tokens=2000, output_tokens=8000, reasoning_tokens=3000, total_tokens=10000)
+        jsonschema.validate(build_attribution(provider_result=r, prompt_anchor="x"), _get_schema())

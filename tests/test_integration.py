@@ -1322,6 +1322,7 @@ class TestGenerationLedgerWiring:
         assert rec["requested_size"] == "512x512"
         assert "latency_ms" in rec
         assert rec["hosted_url"] == result["hosted_url"]
+        assert "output" not in rec  # raster lines stay as they were (COS-21)
 
     @pytest.mark.anyio
     async def test_failure_writes_exactly_one_line(
@@ -1860,3 +1861,178 @@ class TestEditImage:
         last = json.loads((tmp_path / "ledger.jsonl").read_text().splitlines()[-1])
         assert last["outcome"] != "success"
         assert last["model"] == "flux-3-image"
+
+
+SVG_BYTES = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16"/></svg>'
+
+
+def _gif_bytes(size=(512, 512)) -> bytes:
+    buf = io.BytesIO()
+    frames = [Image.new("RGB", size, color=c) for c in ((10, 20, 30), (40, 50, 60))]
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=200)
+    return buf.getvalue()
+
+
+class TestGifSvgOutput:
+    """COS-21: output='gif'|'svg' on request, 2.6 models only, stored as returned."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_registry(self, monkeypatch):
+        from mcp_bildsprache import jobs
+
+        monkeypatch.setattr(jobs, "_REGISTRY", jobs.JobRegistry())
+        yield
+        for task in list(jobs._BACKGROUND_TASKS):
+            task.cancel()
+
+    @staticmethod
+    def _provider(data: bytes, mime: str, delay: float = 0.0):
+        calls: list[dict] = []
+
+        async def _render(prompt, w, h, **kwargs):
+            calls.append({"w": w, "h": h, **kwargs})
+            await asyncio.sleep(delay)
+            return ProviderResult(
+                image_data=data, mime_type=mime, model=kwargs.get("model", "?"),
+                cost_estimate="$0.06", usage={"input_tokens": 80, "output_tokens": 2073},
+            )
+
+        return _render, calls
+
+    async def _run(self, tmp_path, monkeypatch, provider, sync_wait=INLINE_WAIT, **kwargs):
+        from mcp_bildsprache import config as cfg
+        from mcp_bildsprache.server import generate_image
+
+        ledger_file = tmp_path / "_ledger" / "generations.jsonl"
+        monkeypatch.setattr(cfg.settings, "ledger_enabled", True)
+        monkeypatch.setattr(cfg.settings, "ledger_path", str(ledger_file))
+        with patch("mcp_bildsprache.server.PROVIDERS", {"openai": provider, "gemini": provider}), \
+             patch("mcp_bildsprache.server.settings") as s, \
+             patch("mcp_bildsprache.storage.settings") as ss, \
+             patch("mcp_bildsprache.server.process_image") as process:
+            s.openai_image_model = "gpt-image-2.5-flare"  # must not leak into gif/svg
+            s.openai_svg_model = "gpt-5.5"
+            s.sync_wait_seconds = sync_wait
+            s.poll_wait_max_seconds = INLINE_WAIT
+            ss.image_storage_path = str(tmp_path / "out")
+            ss.image_domain = "https://img.cdit-works.de"
+            result = _d(await generate_image(prompt="a fern sways", context="casey", **kwargs))
+            if result.get("status") == "pending":
+                from mcp_bildsprache.server import get_image_result
+
+                result = _d(await get_image_result(result["job_id"], wait_seconds=INLINE_WAIT))
+        assert not process.called, "gif/svg must skip the WebP pipeline"
+        return result, json.loads(ledger_file.read_text().splitlines()[-1])
+
+    @pytest.mark.anyio
+    async def test_gif_stored_as_returned(self, tmp_path, monkeypatch):
+        gif = _gif_bytes()
+        provider, calls = self._provider(gif, "image/gif")
+        result, record = await self._run(
+            tmp_path, monkeypatch, provider, output="gif", frame_count=4, frame_duration_ms=100
+        )
+        assert result["hosted_url"].endswith("-512x512.gif")
+        stored = tmp_path / "out" / result["hosted_url"].split("img.cdit-works.de/")[1]
+        assert stored.read_bytes() == gif
+        assert result["dimensions"] == "512x512"  # the real frame size, not the 1200 default
+        assert result["output"] == "gif"
+        assert calls[0]["model"] == "gpt-image-2.6-flare"
+        assert (calls[0]["output_format"], calls[0]["frame_count"], calls[0]["frame_duration_ms"]) == ("gif", 4, 100)
+        assert "reference_images" not in calls[0]
+        assert "gpt-image-2.6-flare default" in result["model_reason"]
+        assert result["ai_attribution"]["params"]["output_format"] == "gif"
+        assert (record["outcome"], record["output"]) == ("success", "gif")
+
+    @pytest.mark.anyio
+    async def test_svg_runs_the_job_path_and_keeps_markup(self, tmp_path, monkeypatch):
+        provider, calls = self._provider(SVG_BYTES, "image/svg+xml", delay=0.2)
+        result, record = await self._run(
+            tmp_path, monkeypatch, provider, sync_wait=0.01,
+            output="svg", model="gpt-image-2.6-sunburst",
+        )
+        assert result["status"] == "done"
+        assert result["hosted_url"].endswith(".svg")
+        stored = tmp_path / "out" / result["hosted_url"].split("img.cdit-works.de/")[1]
+        assert stored.read_bytes() == SVG_BYTES
+        assert calls[0]["model"] == "gpt-image-2.6-sunburst"
+        assert calls[0]["output_format"] == "svg"
+        assert result["ai_attribution"]["params"]["svg_model"] == "gpt-5.5"
+        assert record["output"] == "svg"
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"output": "gif", "model": "gpt-image-2.5-flare"}, "needs gpt-image-2.6-flare"),
+            ({"output": "svg", "model": "gemini"}, "needs gpt-image-2.6-flare"),
+            ({"output": "svg", "model": "openai"}, "needs gpt-image-2.6-flare"),
+            ({"frame_count": 4}, "output='gif' only"),
+            ({"output": "svg", "frame_duration_ms": 100}, "output='gif' only"),
+            ({"output": "svg", "reference_images": [b"x"]}, "no reference_images"),
+            ({"output": "gif", "transparent": True}, "png or webp"),
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_validation_errors(self, kwargs, match, mock_provider):
+        from mcp_bildsprache.server import generate_image
+
+        with pytest.raises(ToolError, match=match):
+            await generate_image(prompt="x", **kwargs)
+        mock_provider.assert_not_called()
+
+    @pytest.mark.parametrize(("arg", "value"), [("frame_count", 1), ("frame_count", 17), ("frame_duration_ms", 10)])
+    @pytest.mark.anyio
+    async def test_frame_limits_enforced_over_the_wire(self, arg, value, mock_provider):
+        from fastmcp import Client
+
+        from mcp_bildsprache.server import mcp
+
+        async with Client(mcp) as client:
+            with pytest.raises(ToolError, match=f"(?s)validation error.*{arg}"):
+                await client.call_tool("generate_image", {"prompt": "x", "output": "gif", arg: value})
+        mock_provider.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_list_models_says_on_request_and_cost(self):
+        from pydantic import SecretStr
+
+        from mcp_bildsprache.server import list_models
+
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.openai_api_key = SecretStr("k")
+            s.gemini_api_key = SecretStr("")
+            s.bfl_api_key = SecretStr("")
+            s.openai_image_model = ""
+            s.openai_svg_model = "gpt-5.5"
+            outputs = _d(await list_models())["providers"][0]["outputs"]
+        assert "on request only" in outputs["gif"] and "4x" in outputs["gif"]
+        assert "on request only" in outputs["svg"] and "€0.25" in outputs["svg"]
+
+
+class TestSvgServedSafely:
+    """Model-written SVG on img.cdit-works.de must not run scripts or load anything."""
+
+    def test_svg_gets_csp_and_type_gif_does_not(self, tmp_path: Path):
+        from starlette.applications import Starlette
+        from starlette.testclient import TestClient
+
+        from mcp_bildsprache.server import SVG_CSP, _mount_static_files
+
+        (tmp_path / "casey").mkdir()
+        (tmp_path / "casey" / "a.svg").write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+        (tmp_path / "casey" / "a.gif").write_bytes(_gif_bytes((16, 16)))
+        app = Starlette()
+        with patch("mcp_bildsprache.server.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            _mount_static_files(app)
+        client = TestClient(app)
+
+        svg = client.get("/casey/a.svg")
+        assert svg.status_code == 200
+        assert svg.headers["content-type"] == "image/svg+xml"
+        assert svg.headers["content-security-policy"] == SVG_CSP
+        assert "script-src" not in SVG_CSP and "default-src 'none'" in SVG_CSP and "sandbox" in SVG_CSP
+        assert svg.headers["x-content-type-options"] == "nosniff"
+
+        gif = client.get("/casey/a.gif")
+        assert gif.headers["content-type"] == "image/gif"
+        assert "content-security-policy" not in gif.headers

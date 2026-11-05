@@ -75,6 +75,16 @@ openai:
     usd_per_1m_cached_input_tokens: 0.25
     usd_per_1m_output_tokens: 8.00
     batch_discount: 0.50
+  # Text model that writes the SVG for GPT Image 2.6 svg output (COS-21),
+  # billed from the response's svg_usage on top of the image tokens.
+  # Standard tier, <272K context, developers.openai.com/api/docs/pricing, 2026-11-05.
+  gpt-5.5:
+    mode: per-token
+    kind: text
+    usd_per_1m_input_tokens: 5.00
+    usd_per_1m_cached_input_tokens: 0.50
+    usd_per_1m_output_tokens: 30.00
+    batch_discount: 0.50
 
 bfl:
   # FLUX family. BFL does not expose usage tokens — priced per image.

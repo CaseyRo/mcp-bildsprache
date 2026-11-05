@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # gpt-image-2.6-sunburst for identity scenes, gpt-image-2.5-sunburst otherwise
     # (bake-off 2026-11-05). Set it (e.g. to pin a snapshot) to force one model.
     openai_image_model: str = ""
+    # Text model that writes the SVG for output="svg" (COS-21). Needs a row in
+    # the cost table (_shared/provider_costs.v1.yaml) to be priced.
+    openai_svg_model: str = "gpt-5.5"
 
     # Image hosting
     enable_hosting: bool = True

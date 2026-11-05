@@ -532,3 +532,91 @@ class TestMiniSizeSnapping:
 
 
 # (TestMiniSizeInRequest removed: mini is no longer reachable — pinned to gpt-image-2.)
+
+
+class TestGifSvgOutput:
+    """COS-21: gif and svg on /images/generations, 2.6 models only."""
+
+    async def test_gif_request_shape(self, httpx_mock: HTTPXMock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(json=_response_body(usage={"input_tokens": 80, "output_tokens": 2073}))
+        r = await generate_openai(
+            "fern", width=1200, height=1200, model="gpt-image-2.6-flare",
+            output_format="gif", frame_count=4, frame_duration_ms=100,
+        )
+        payload = _json.loads(httpx_mock.get_request().read())
+        assert payload["output_format"] == "gif"
+        assert payload["size"] == "512x512"
+        assert (payload["frame_count"], payload["frame_duration_ms"], payload["n"]) == (4, 100, 1)
+        assert "background" not in payload and "output_compression" not in payload
+        assert "svg" not in payload
+        assert r.mime_type == "image/gif"
+
+    async def test_gif_omits_frame_params_when_not_given(self, httpx_mock: HTTPXMock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
+        await generate_openai("x", model="gpt-image-2.6-sunburst", output_format="gif")
+        payload = _json.loads(httpx_mock.get_request().read())
+        assert "frame_count" not in payload and "frame_duration_ms" not in payload
+
+    def test_gif_frame_size_keeps_aspect_long_edge_512(self) -> None:
+        from mcp_bildsprache.providers.openai import gif_frame_size
+
+        assert gif_frame_size(1200, 1200) == (512, 512)
+        assert gif_frame_size(1200, 630) == (512, 272)
+        assert gif_frame_size(256, 512) == (256, 512)
+
+    async def test_svg_request_shape_usage_and_timeout(self, httpx_mock: HTTPXMock) -> None:
+        import json as _json
+
+        svg_usage = {"input_tokens": 2000, "model": "gpt-5.5", "output_tokens": 8000,
+                     "reasoning_tokens": 3000, "total_tokens": 10000}
+        body = _response_body(usage={"input_tokens": 100, "output_tokens": 1000})
+        body["svg_usage"] = svg_usage
+        httpx_mock.add_response(json=body)
+        r = await generate_openai("caravan", model="gpt-image-2.6-flare", output_format="svg")
+        request = httpx_mock.get_request()
+        payload = _json.loads(request.read())
+        assert payload["svg"] == {"model": "gpt-5.5"}
+        assert (payload["output_format"], payload["n"]) == ("svg", 1)
+        assert "background" not in payload and "output_compression" not in payload
+        assert "frame_count" not in payload
+        # An SVG takes ~2 min; the 120 s default would cut it.
+        assert request.extensions["timeout"]["read"] == 300.0
+        assert r.mime_type == "image/svg+xml"
+        assert r.usage["svg_usage"] == svg_usage
+        assert r.usage["output_tokens"] == 1000
+
+    async def test_svg_model_comes_from_config(self, httpx_mock: HTTPXMock, monkeypatch) -> None:
+        import json as _json
+
+        from mcp_bildsprache.config import settings
+
+        monkeypatch.setattr(settings, "openai_svg_model", "gpt-5.4")
+        httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
+        await generate_openai("x", model="gpt-image-2.6-sunburst", output_format="svg")
+        assert _json.loads(httpx_mock.get_request().read())["svg"] == {"model": "gpt-5.4"}
+
+    @pytest.mark.parametrize("fmt", ["gif", "svg"])
+    @pytest.mark.parametrize("model", ["gpt-image-2", "gpt-image-2.5-flare"])
+    async def test_rejects_models_before_2_6(self, fmt: str, model: str) -> None:
+        with pytest.raises(ValueError, match=r"needs gpt-image-2\.6-flare"):
+            await generate_openai("x", model=model, output_format=fmt)
+
+    @pytest.mark.parametrize("fmt", ["gif", "svg"])
+    async def test_rejects_reference_images(self, fmt: str) -> None:
+        with pytest.raises(ValueError, match="no reference images"):
+            await generate_openai(
+                "x", model="gpt-image-2.6-flare", output_format=fmt, reference_images=[_ref()]
+            )
+
+    async def test_raster_still_sends_background(self, httpx_mock: HTTPXMock) -> None:
+        import json as _json
+
+        httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
+        await generate_openai("x", model="gpt-image-2.6-flare")
+        request = httpx_mock.get_request()
+        assert _json.loads(request.read())["background"] == "opaque"
+        assert request.extensions["timeout"]["read"] == 120.0

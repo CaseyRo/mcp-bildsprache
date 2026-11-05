@@ -17,7 +17,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
 from mcp.types import Icon, ToolAnnotations
 from PIL import Image as PILImage
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, Field
 from starlette.requests import Request as _SReq
 from starlette.responses import JSONResponse as _SResp
 
@@ -80,9 +80,9 @@ from mcp_bildsprache.providers.bfl import (
     resolution_for,
 )
 from mcp_bildsprache.providers.gemini import GEMINI_MAX_CHARACTER_REFS, generate_gemini
+from mcp_bildsprache.providers.openai import GIF_MODELS, generate_openai
 from mcp_bildsprache.providers.openai import IMAGE_MODELS as OPENAI_MODELS
 from mcp_bildsprache.providers.openai import check_options as check_openai_options
-from mcp_bildsprache.providers.openai import generate_openai
 from mcp_bildsprache.storage import (
     StorageError,
     resolve_stored_image,
@@ -130,6 +130,10 @@ _ModelLiteral = Literal[
 Model = Annotated[_ModelLiteral, BeforeValidator(_drop_retired_hint)]
 Register = Literal["personal", "professional"]
 Quality = Literal["low", "medium", "high", "xhigh", "max", "auto"]
+# COS-21: GIF and SVG only when a caller asks (they cost more); 2.6 models only.
+Output = Literal["raster", "gif", "svg"]
+# Model-written SVG served on the image domain: no scripts, nothing external.
+SVG_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
 BrandContext = Literal[
     # Active brands (May 2026 brand collapse).
     "casey", "yorizon",
@@ -223,6 +227,7 @@ def _record_generation_attempt(
     cost_estimate_eur: float | None = None,
     delivery: str | None = None,
     model_reason: str | None = None,
+    output: str = "raster",
 ) -> None:
     """Write exactly one ledger line for a generation attempt. Best-effort.
 
@@ -231,6 +236,11 @@ def _record_generation_attempt(
     raise into the generation path (CDI-1264 acceptance: ledger failures never
     break generation).
     """
+    extra: dict[str, Any] = {}
+    if model_reason:
+        extra["model_reason"] = model_reason
+    if output != "raster":
+        extra["output"] = output
     try:
         record = _ledger.build_record(
             request_id=request_id,
@@ -247,7 +257,7 @@ def _record_generation_attempt(
             hosted_url=hosted_url,
             cost_estimate_eur=cost_estimate_eur,
             delivery=delivery,  # type: ignore[arg-type]
-            extra={"model_reason": model_reason} if model_reason else None,
+            extra=extra or None,
         )
         _ledger.append_record(record)
     except Exception:  # pragma: no cover — ledger must never break generation
@@ -392,8 +402,12 @@ async def _render_image_job(
     est_cost: float | None,
     openai_options: dict[str, Any] | None = None,
     model_reason: str | None = None,
+    output: str = "raster",
 ) -> dict[str, Any]:
     """Run the raster render+store pipeline and return the result dict.
+
+    ``output`` gif or svg (COS-21) skips the WebP pipeline: the file is stored
+    as OpenAI returned it, a GIF at its real frame size.
 
     Detached-task contract (CDI-1266): no Context, no progress notifications.
     Writes exactly one CDI-1264 ledger line (success OR failure) and updates the
@@ -435,6 +449,7 @@ async def _render_image_job(
             error_message=str(e),
             cost_estimate_eur=est_cost,
             model_reason=model_reason,
+            output=output,
         )
         registry.mark_error(job_id, error=str(e), error_category=category)
         raise
@@ -448,15 +463,19 @@ async def _render_image_job(
             include_dogs is not None,
         )
 
+    if output == "gif":
+        w, h = _image_size(provider_result.image_data)  # the frame size OpenAI rendered
+    params: dict[str, Any] = {"platform": platform, "dimensions": f"{w}x{h}"}
+    if output != "raster":
+        params.update({k: v for k, v in (openai_options or {}).items() if v is not None})
+    if output == "svg":
+        params["svg_model"] = settings.openai_svg_model
     attribution = build_attribution(
         provider_result=provider_result,
         prompt_anchor=prompt,
         effective_prompt=enhanced_prompt,
         brand_context=context,
-        params={
-            "platform": platform,
-            "dimensions": f"{w}x{h}",
-        },
+        params=params,
     )
 
     result: dict = {
@@ -468,20 +487,25 @@ async def _render_image_job(
         "dimensions": f"{w}x{h}",
         "ai_attribution": attribution,
     }
+    if output != "raster":
+        result["output"] = output
     if fallback_used:
         result["fallback_used"] = True
         result["intended_provider"] = original_model
         result["fallback_reason"] = "provider_error"
 
     try:
-        processed_bytes = await asyncio.to_thread(
-            process_image,
-            provider_result=provider_result,
-            target_width=w,
-            target_height=h,
-            prompt=enhanced_prompt,
-            brand_context=context,
-        )
+        if output == "raster":
+            processed_bytes = await asyncio.to_thread(
+                process_image,
+                provider_result=provider_result,
+                target_width=w,
+                target_height=h,
+                prompt=enhanced_prompt,
+                brand_context=context,
+            )
+        else:
+            processed_bytes = provider_result.image_data  # GIF/SVG stored as returned
         hosted_url = await asyncio.to_thread(
             store_image,
             image_data=processed_bytes,
@@ -494,6 +518,7 @@ async def _render_image_job(
             fallback_used=fallback_used,
             original_model=original_model,
             attribution=attribution,
+            ext="webp" if output == "raster" else output,
         )
     except Exception as e:
         outcome, category = _classify_generation_error(e)
@@ -510,12 +535,13 @@ async def _render_image_job(
             error_message=str(e),
             cost_estimate_eur=(attribution.get("cost", {}) or {}).get("amount_eur"),
             model_reason=model_reason,
+            output=output,
         )
         registry.mark_error(job_id, error=str(e), error_category=category)
         raise
     result["hosted_url"] = hosted_url
 
-    if raw:
+    if raw and output == "raster":
         try:
             raw_url = await asyncio.to_thread(
                 store_raw_image,
@@ -560,6 +586,7 @@ async def _render_image_job(
         cost_estimate_eur=(cost_block or {}).get("amount_eur"),
         delivery="delivered",
         model_reason=model_reason,
+        output=output,
     )
     registry.mark_done(job_id, result)
     return result
@@ -1160,6 +1187,9 @@ async def generate_image(
     background: bool = False,
     quality: Quality | None = None,
     transparent: bool = False,
+    output: Output = "raster",
+    frame_count: Annotated[int | None, Field(ge=2, le=16)] = None,
+    frame_duration_ms: Annotated[int | None, Field(ge=20)] = None,
     ctx: Context | None = None,
 ) -> GenerateImageResult:
     """[image] Generate a brand-aware image.
@@ -1239,6 +1269,21 @@ async def generate_image(
                 ``xhigh`` / ``max`` on the 2.5 and 2.6 models. Default ``medium``.
         transparent: OpenAI 2.5 and 2.6 models only: render on a transparent
                 background (kept as WebP alpha).
+        output: ``raster`` (default, a WebP). ``gif`` (animated) or ``svg``
+                (vector) ONLY when the user asks for that format: both cost more
+                and are never the right default. GPT Image 2.6 only: no
+                ``model`` means gpt-image-2.6-flare, ``gpt-image-2.6-sunburst``
+                is the alternative, any other model is an error. No reference
+                images (identity packs are not attached). The file is stored as
+                returned (``.gif`` / ``.svg``), not resized; ``raw`` has no
+                effect. GIF: frames are 512 px on the long edge, about 4x the
+                cost of a small still (~€0.06 for 9 frames), 10-30 s. SVG: an
+                image model draws a reference, a text model writes the SVG;
+                about €0.25 and about 2 minutes, so expect a job handle and
+                poll ``get_image_result``.
+        frame_count: ``output='gif'`` only: 2-16 frames (API default 9).
+        frame_duration_ms: ``output='gif'`` only: delay per frame, at least
+                20 ms (API default 200).
     """
     if presets:
         bundle_register, bundle_platform = PRESET_BUNDLES[presets]
@@ -1246,10 +1291,22 @@ async def generate_image(
         register = register or bundle_register
         platform = platform or bundle_platform
 
+    if output != "gif" and (frame_count is not None or frame_duration_ms is not None):
+        raise ToolError("frame_count and frame_duration_ms apply to output='gif' only")
+    if output != "raster":
+        if model is not None and model not in GIF_MODELS:
+            raise ToolError(
+                f"output='{output}' needs gpt-image-2.6-flare or gpt-image-2.6-sunburst "
+                f"(omit model for flare), not '{model}'"
+            )
+        if reference_images:
+            raise ToolError(f"output='{output}' takes no reference_images")
+
     # ------------------------------------------------------------------
     # Identity resolution (before routing, so has_references is accurate)
     # ------------------------------------------------------------------
-    pack: IdentityPack | None = get_pack_for_context(context)
+    # GIF/SVG run on /images/generations, which takes no refs: skip the pack.
+    pack: IdentityPack | None = get_pack_for_context(context) if output == "raster" else None
     resolved_paths: list[Path] = []
     resolved_slots: list[str] = []
     used_identity_pack = False
@@ -1296,15 +1353,22 @@ async def generate_image(
         # Gemini rejects calls over its per-call character-image cap (400).
         resolved_paths = spread_across_slots(pack, resolved_paths, GEMINI_MAX_CHARACTER_REFS)
         refs_bytes = [_read_reference_bytes(p) for p in resolved_paths]
-    specific_model, model_reason = _pick_raster_model(
-        selected_provider, model, identity_scene=person_scene, why=person_why
-    )
+    if output == "raster":
+        specific_model, model_reason = _pick_raster_model(
+            selected_provider, model, identity_scene=person_scene, why=person_why
+        )
+    else:
+        specific_model = model or GIF_MODELS[0]
+        model_reason = f"{output} on request: " + ("explicit model" if model else "gpt-image-2.6-flare default")
     if quality is not None or transparent:
         if selected_provider != "openai":
             raise ToolError("quality and transparent apply to OpenAI models only")
         try:
             check_openai_options(
-                specific_model, quality or "medium", "transparent" if transparent else "opaque"
+                specific_model,
+                quality or "medium",
+                "transparent" if transparent else "opaque",
+                "webp" if output == "raster" else output,
             )
         except ValueError as e:
             raise ToolError(str(e)) from e
@@ -1313,6 +1377,10 @@ async def generate_image(
         openai_options["quality"] = quality
     if transparent:
         openai_options["background"] = "transparent"
+    if output != "raster":
+        openai_options.update(
+            output_format=output, frame_count=frame_count, frame_duration_ms=frame_duration_ms
+        )
 
     # Determine dimensions
     if dimensions:
@@ -1397,6 +1465,7 @@ async def generate_image(
             est_cost=est_cost,
             openai_options=openai_options,
             model_reason=model_reason,
+            output=output,
         )
 
     # On a fast failure _dispatch_and_maybe_wait re-raises the render's exact
@@ -1854,6 +1923,19 @@ async def list_models() -> ModelsResult:
             "cost": "usage-based, same token rates for every model (real figure in ai_attribution)",
             "rate_limit": "Tier 1: 5 IPM / 100K TPM (sequential dispatch)",
             "status": "available",
+            "outputs": {
+                "raster": "default: WebP",
+                "gif": (
+                    "on request only (output='gif'), gpt-image-2.6-flare/-sunburst: "
+                    "animated, 512 px frames, 2-16 frames; about 4x a small still "
+                    "(~€0.06 for 9 frames), 10-30 s"
+                ),
+                "svg": (
+                    f"on request only (output='svg'), gpt-image-2.6-flare/-sunburst, "
+                    f"written by {settings.openai_svg_model}: about €0.25 and about "
+                    "2 minutes (job handle, poll get_image_result)"
+                ),
+            },
         })
 
     if settings.gemini_api_key.get_secret_value():
@@ -2412,11 +2494,20 @@ def _mount_static_files(app) -> None:
     # Ensure image mime types are registered (python:slim may lack these)
     mimetypes.add_type("image/webp", ".webp")
     mimetypes.add_type("image/avif", ".avif")
+    mimetypes.add_type("image/svg+xml", ".svg")
+
+    class _ImageFiles(StaticFiles):
+        async def get_response(self, path, scope):
+            response = await super().get_response(path, scope)
+            if path.endswith(".svg"):
+                response.headers["Content-Security-Policy"] = SVG_CSP
+                response.headers["X-Content-Type-Options"] = "nosniff"
+            return response
 
     storage_path = Path(settings.image_storage_path)
     storage_path.mkdir(parents=True, exist_ok=True)
 
-    app.mount("/", StaticFiles(directory=str(storage_path)), name="images")
+    app.mount("/", _ImageFiles(directory=str(storage_path)), name="images")
     logger.info("Static file serving enabled at %s", storage_path)
 
 
