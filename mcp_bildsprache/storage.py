@@ -29,8 +29,9 @@ def store_image(
     fallback_used: bool = False,
     original_model: str | None = None,
     attribution: dict | None = None,
+    ext: str = "webp",
 ) -> str:
-    """Store a processed WebP image and return its hosted URL.
+    """Store a processed WebP image (or a GIF/SVG as returned, ``ext``) and return its hosted URL.
 
     Writes the image file and a JSON sidecar to the filesystem.
     Returns the full hosted URL (e.g. https://img.cdit-works.de/casey-berlin/slug-1200x630.webp).
@@ -38,18 +39,18 @@ def store_image(
     Raises StorageError if storage fails after one retry.
     """
     base_path = Path(settings.image_storage_path)
-    brand_prefix, filename = make_slug(prompt, width, height, brand_context)
+    brand_prefix, filename = make_slug(prompt, width, height, brand_context, ext=ext)
 
     dir_path = base_path / brand_prefix
     dir_path.mkdir(parents=True, exist_ok=True)
 
     file_path = dir_path / filename
 
-    # Handle slug collision
-    if file_path.exists():
+    # Handle slug collision (the sidecar too: a .webp and a .gif of one slug share it)
+    if file_path.exists() or file_path.with_suffix(".json").exists():
         suffix = make_collision_suffix(image_data)
         stem = file_path.stem  # e.g. "morning-walk-1200x630"
-        filename = f"{stem}-{suffix}.webp"
+        filename = f"{stem}-{suffix}.{ext}"
         file_path = dir_path / filename
 
     # Write image (retry once on failure)

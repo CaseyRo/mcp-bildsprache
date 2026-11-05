@@ -288,3 +288,31 @@ class TestResolveStoredImage:
     def test_never_escapes_storage(self):
         assert resolve_stored_image("../secret.txt") is None
         assert resolve_stored_image("https://img.cdit-works.de/../secret.txt") is None
+
+
+class TestStoreAsReturned:
+    """COS-21: GIF and SVG keep their own extension, collisions included."""
+
+    @pytest.mark.parametrize("ext", ["gif", "svg"])
+    def test_ext_in_file_and_url(self, tmp_path: Path, ext: str):
+        with patch("mcp_bildsprache.storage.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            first = store_image(b"one", "a fern", 512, 512, "gpt-image-2.6-flare", "$0.06",
+                                brand_context="casey", ext=ext)
+            second = store_image(b"two", "a fern", 512, 512, "gpt-image-2.6-flare", "$0.06",
+                                 brand_context="casey", ext=ext)
+        assert first == f"https://img.cdit-works.de/casey/a-fern-512x512.{ext}"
+        assert second.endswith(f".{ext}") and second != first
+        assert (tmp_path / "casey" / f"a-fern-512x512.{ext}").read_bytes() == b"one"
+        assert json.loads((tmp_path / "casey" / "a-fern-512x512.json").read_text())["model"]
+
+    def test_svg_next_to_same_slug_webp_keeps_both_sidecars(self, tmp_path: Path):
+        with patch("mcp_bildsprache.storage.settings") as s:
+            s.image_storage_path = str(tmp_path)
+            s.image_domain = "https://img.cdit-works.de"
+            webp = store_image(b"w", "a fern", 512, 512, "m", "$0", brand_context="casey")
+            svg = store_image(b"s", "a fern", 512, 512, "m", "$0", brand_context="casey", ext="svg")
+        assert webp.endswith("a-fern-512x512.webp")
+        assert svg.endswith(".svg") and "a-fern-512x512-" in svg
+        assert len(list((tmp_path / "casey").glob("*.json"))) == 2

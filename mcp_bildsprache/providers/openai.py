@@ -9,7 +9,7 @@ Endpoint: POST https://api.openai.com/v1/images/generations
 Defaults:
 - model:          per call, else OPENAI_IMAGE_MODEL, else gpt-image-2
 - quality:        medium (2.5 and 2.6 models add xhigh and max)
-- output_format:  webp
+- output_format:  webp (gif and svg on the 2.6 models only, COS-21)
 - compression:    90 (only applied for jpeg/webp)
 - background:     opaque (transparent only on the 2.5 and 2.6 models, png/webp output)
 - moderation:     auto
@@ -71,8 +71,30 @@ IMAGE_MODELS = (
 MAX_REFERENCE_IMAGES = 16
 
 _MIME_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+_OUTPUT_MIME = {
+    "webp": "image/webp",
+    "png": "image/png",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "svg": "image/svg+xml",
+}
+# GIF and SVG (COS-21): generations only, 2.6 models only, no refs.
+SPECIAL_OUTPUTS = ("gif", "svg")
+GIF_MODELS = ("gpt-image-2.6-flare", "gpt-image-2.6-sunburst")
+# GIF frames go on one sheet that must fit the pixel budget: 1024 px frames do
+# not fit at any frame count, 512 px fit up to 16 (5 Nov 2026 bake-off + ofox).
+_GIF_MAX_EDGE = 512
 _QUALITIES = ("low", "medium", "high", "auto")
 _QUALITIES_25 = ("low", "medium", "high", "xhigh", "max", "auto")
+
+
+def gif_frame_size(width: int, height: int) -> tuple[int, int]:
+    """Frame size for GIF output: the caller's aspect, long edge 512, multiples of 16."""
+    scale = _GIF_MAX_EDGE / max(width, height)
+    return (
+        max(_SNAP, round(width * scale / _SNAP) * _SNAP),
+        max(_SNAP, round(height * scale / _SNAP) * _SNAP),
+    )
 
 
 def has_25_options(model: str) -> bool:
@@ -227,6 +249,8 @@ async def generate_openai(
     background: str = "opaque",
     moderation: str = "auto",
     stream: bool = False,
+    frame_count: int | None = None,
+    frame_duration_ms: int | None = None,
     **kwargs: Any,
 ) -> ProviderResult:
     """Generate an image using an OpenAI GPT Image model.
@@ -242,12 +266,16 @@ async def generate_openai(
         model: One of IMAGE_MODELS; None → OPENAI_IMAGE_MODEL.
         quality: "low" | "medium" | "high" | "auto" (+ "xhigh" | "max" on
             the 2.5 and 2.6 models). Default "medium".
-        output_format: "webp" (default), "png", or "jpeg".
+        output_format: "webp" (default), "png", or "jpeg"; "gif" or "svg"
+            on the 2.6 models only (no reference images). GIF frames are 512 px
+            on the long edge; SVG sends ``svg.model`` = OPENAI_SVG_MODEL and
+            returns the author's tokens as ``usage["svg_usage"]``.
         output_compression: 0-100. Only applied for jpeg/webp.
         background: "opaque" | "auto" | "transparent" ("transparent" only on
             the 2.5 and 2.6 models with png/webp output).
         moderation: "auto" | "low". Default "auto".
         stream: Not supported in v1 — rejected with a clear error.
+        frame_count / frame_duration_ms: GIF only (API: 2-16 frames, >= 20 ms).
 
     Returns:
         ProviderResult with raw bytes, usage block, revised_prompt (when
@@ -269,11 +297,19 @@ async def generate_openai(
 
     model = model or settings.openai_image_model or "gpt-image-2"
     check_options(model, quality, background, output_format)
+    special = output_format in SPECIAL_OUTPUTS
+    if special and model not in GIF_MODELS:
+        raise ValueError(f"openai: {output_format} output needs {' or '.join(GIF_MODELS)}, not {model}")
+    if special and reference_images:
+        raise ValueError(f"openai: {output_format} output takes no reference images")
 
     # Strip params gpt-image-2 rejects.
     _strip_unsupported_kwargs(kwargs)
 
-    snapped_w, snapped_h = _validate_and_snap_size(width, height, model=model)
+    if output_format == "gif":
+        snapped_w, snapped_h = gif_frame_size(width, height)
+    else:
+        snapped_w, snapped_h = _validate_and_snap_size(width, height, model=model)
     size = f"{snapped_w}x{snapped_h}"
 
     headers_json = {
@@ -294,7 +330,9 @@ async def generate_openai(
         reference_images = reference_images[:MAX_REFERENCE_IMAGES]
     probed = [(_probe_mime(i, b), b) for i, b in enumerate(reference_images or [])]
 
-    async with httpx.AsyncClient(timeout=120.0) as client, _OPENAI_DISPATCH_LOCK:
+    # An SVG takes about 2 minutes (the text model writes it), past the 120 s default.
+    timeout = 300.0 if output_format == "svg" else 120.0
+    async with httpx.AsyncClient(timeout=timeout) as client, _OPENAI_DISPATCH_LOCK:
         if probed:
             # Reference-bearing path: POST /v1/images/edits with multipart
             # `image[]` uploads. Per the brief's hero shots (which used
@@ -336,9 +374,17 @@ async def generate_openai(
                 "quality": quality,
                 "n": 1,
                 "output_format": output_format,
-                "background": background,
                 "moderation": moderation,
             }
+            if not special:  # the bake-off's gif/svg calls sent no background
+                payload["background"] = background
+            if output_format == "gif":
+                if frame_count is not None:
+                    payload["frame_count"] = frame_count
+                if frame_duration_ms is not None:
+                    payload["frame_duration_ms"] = frame_duration_ms
+            if output_format == "svg":
+                payload["svg"] = {"model": settings.openai_svg_model}
             # output_compression only valid for jpeg/webp
             if output_format in ("jpeg", "webp"):
                 payload["output_compression"] = int(output_compression)
@@ -354,13 +400,12 @@ async def generate_openai(
         raise ValueError(f"openai: response missing b64_json: {entry}")
     image_bytes = base64.b64decode(b64)
 
-    mime = {
-        "webp": "image/webp",
-        "png": "image/png",
-        "jpeg": "image/jpeg",
-    }.get(output_format, "image/webp")
+    mime = _OUTPUT_MIME.get(output_format, "image/webp")
 
     usage = data.get("usage") or {}
+    if data.get("svg_usage"):
+        # The SVG author's tokens; attribution prices them on their own row.
+        usage = {**usage, "svg_usage": data["svg_usage"]}
     revised_prompt = entry.get("revised_prompt")
 
     # Compute a legacy cost string for backward-compat. The authoritative

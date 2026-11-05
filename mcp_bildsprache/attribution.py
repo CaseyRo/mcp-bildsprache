@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
@@ -100,6 +101,11 @@ def _build_usage(provider_result: ProviderResult) -> dict[str, Any]:
         breakdown["partial_image_overhead"] = po
     if (tt := raw.get("thinking_tokens")) is not None:
         breakdown["thinking"] = tt
+    if svg := raw.get("svg_usage"):
+        # The SVG author's (text model's) tokens, separate from the image tokens.
+        breakdown["svg_input"] = svg.get("input_tokens")
+        breakdown["svg_output"] = svg.get("output_tokens")
+        breakdown["svg_reasoning"] = svg.get("reasoning_tokens")
 
     return {
         "input": input_tokens,
@@ -144,7 +150,7 @@ def _build_cost_block(
         )
         return _legacy_cost_fallback(provider_result, table)
 
-    return {
+    block = {
         "amount_eur": result.amount_eur,
         "method": result.method,
         "source_currency": result.source_currency,
@@ -153,6 +159,33 @@ def _build_cost_block(
         "tier": result.tier,
         "breakdown_usd": result.breakdown_usd,
     }
+    if svg := raw_usage.get("svg_usage"):
+        _add_svg_author_cost(block, table, svg, tier)
+    return block
+
+
+def _add_svg_author_cost(
+    block: dict[str, Any], table: dict[str, Any], svg: dict[str, Any], tier: Tier
+) -> None:
+    """Add the SVG author's text-model tokens (COS-21) to an image cost block."""
+    # A dated snapshot (gpt-5.5-2026-..) bills on the base model's row.
+    model = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", svg.get("model") or "")
+    inp = svg.get("input_tokens") or 0
+    # Bill reasoning exactly once, whether or not output_tokens already counts it.
+    out = max(svg.get("output_tokens") or 0, (svg.get("total_tokens") or 0) - inp)
+    try:
+        r = compute_cost(
+            table=table, provider="openai", model=model,
+            usage=Usage(input_tokens=inp, output_tokens=out), tier=tier,
+        )
+    except Exception as e:
+        logger.warning("SVG author %r is not in the cost table, cost under-reported: %s", model, e)
+        return
+    block["breakdown_usd"] = {
+        **block["breakdown_usd"], **{f"svg_{k}": v for k, v in r.breakdown_usd.items()}
+    }
+    block["source_amount"] = round(block["source_amount"] + r.source_amount, 6)
+    block["amount_eur"] = round(block["amount_eur"] + r.amount_eur, 6)
 
 
 def _legacy_cost_fallback(
