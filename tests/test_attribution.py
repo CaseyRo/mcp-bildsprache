@@ -360,7 +360,10 @@ class TestEstimateCostEur:
         assert est > 0
 
 
-@pytest.mark.parametrize("model", ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"],
+)
 def test_gpt_image_25_priced_like_gpt_image_2(model):
     from mcp_bildsprache.attribution import _get_cost_table, estimate_cost_eur
 

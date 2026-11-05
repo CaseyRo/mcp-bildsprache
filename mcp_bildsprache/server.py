@@ -117,6 +117,7 @@ _ModelLiteral = Literal[
     # Active providers (May 2026 brand collapse).
     "gemini", "openai", "gpt-image-2",
     "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+    "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
     # Disabled but accepted at the API boundary so the dispatcher can
     # raise ProviderTemporarilyDisabled with a clear migration message.
     # Removing them from the Literal would surface as a cryptic Pydantic
@@ -1024,7 +1025,7 @@ Choosing a tool:
   brand preset + provider routing + sizing + storage + cost attribution.
   Use for social/blog/OG/proposal imagery. Default provider: OpenAI
   gpt-image-2; pick `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst`
-  (premium, editing) via `model`. WRITES an artifact and incurs paid-API cost.
+  (premium, editing), or their 2.6 versions, via `model`. WRITES an artifact and incurs paid-API cost.
 - `generate_diagram` — flow / sequence / state diagrams from free-text or a
   Mermaid source (flowchart/graph, sequenceDiagram, stateDiagram only).
   Default provider: Gemini Nano Banana Pro (`gemini-3-pro-image-preview` —
@@ -1208,7 +1209,8 @@ async def generate_image(
                 ``context`` / ``register`` / ``platform`` win over the bundle.
         model: Force a provider/model (always wins). OpenAI: ``gpt-image-2``,
                 ``gpt-image-2.5-flare`` (fast everyday), ``gpt-image-2.5-sunburst``
-                (premium, editing precision); ``openai`` = the server default split.
+                (premium, editing precision), ``gpt-image-2.6-flare`` /
+                ``gpt-image-2.6-sunburst`` (newest, same controls); ``openai`` = the server default split.
                 ``gemini`` for Nano Banana. Disabled hints (``flux``,
                 ``recraft``, ``flux-*``) raise PROVIDER_TEMPORARILY_DISABLED.
         platform: Target platform (linkedin-post, blog-hero, etc.) for auto-sizing.
@@ -1234,8 +1236,8 @@ async def generate_image(
                 connection open. Default false (hybrid: inline-wait then fall back
                 to a job handle).
         quality: OpenAI only. ``low`` / ``medium`` / ``high`` / ``auto``, plus
-                ``xhigh`` / ``max`` on the 2.5 models. Default ``medium``.
-        transparent: OpenAI 2.5 models only: render on a transparent
+                ``xhigh`` / ``max`` on the 2.5 and 2.6 models. Default ``medium``.
+        transparent: OpenAI 2.5 and 2.6 models only: render on a transparent
                 background (kept as WebP alpha).
     """
     if presets:
@@ -1845,9 +1847,11 @@ async def list_models() -> ModelsResult:
                 "sibling-series consistency, reference image support. "
                 "gpt-image-2.5-flare is fast; gpt-image-2.5-sunburst is the "
                 "premium/editing model (both add xhigh/max quality and "
-                "transparent backgrounds). Default quality: medium."
+                "transparent backgrounds). gpt-image-2.6-flare and "
+                "gpt-image-2.6-sunburst are the newer pair with the same "
+                "controls, by explicit model only. Default quality: medium."
             ),
-            "cost": "usage-based, same token rates for all three (real figure in ai_attribution)",
+            "cost": "usage-based, same token rates for every model (real figure in ai_attribution)",
             "rate_limit": "Tier 1: 5 IPM / 100K TPM (sequential dispatch)",
             "status": "available",
         })

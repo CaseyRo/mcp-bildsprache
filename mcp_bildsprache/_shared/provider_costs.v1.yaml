@@ -44,6 +44,23 @@ openai:
     usd_per_1m_text_input_tokens: 5.00
     usd_per_1m_output_tokens: 30.00
     batch_discount: 0.50
+  # GPT Image 2.6 (released 2026-11-04, no dated snapshots yet): same rates as 2.5.
+  gpt-image-2.6-flare:
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 8.00
+    usd_per_1m_cached_input_tokens: 2.00
+    usd_per_1m_text_input_tokens: 5.00
+    usd_per_1m_output_tokens: 30.00
+    batch_discount: 0.50
+  gpt-image-2.6-sunburst:
+    mode: per-token-usage
+    kind: image
+    usd_per_1m_input_tokens: 8.00
+    usd_per_1m_cached_input_tokens: 2.00
+    usd_per_1m_text_input_tokens: 5.00
+    usd_per_1m_output_tokens: 30.00
+    batch_discount: 0.50
   gpt-image-1.5:
     mode: per-token-usage
     kind: image

@@ -1,4 +1,4 @@
-"""OpenAI GPT Image provider: gpt-image-2 and gpt-image-2.5-flare / -sunburst (CDI-1014 §4).
+"""OpenAI GPT Image provider: gpt-image-2, and the 2.5 and 2.6 flare / sunburst models (CDI-1014 §4).
 
 Uses httpx directly (matching the pattern of the other providers) rather
 than the `openai` SDK to keep the dependency footprint small. The Images
@@ -8,10 +8,10 @@ Endpoint: POST https://api.openai.com/v1/images/generations
 
 Defaults:
 - model:          per call, else OPENAI_IMAGE_MODEL, else gpt-image-2
-- quality:        medium (2.5 models add xhigh and max)
+- quality:        medium (2.5 and 2.6 models add xhigh and max)
 - output_format:  webp
 - compression:    90 (only applied for jpeg/webp)
-- background:     opaque (transparent only on the 2.5 models, png/webp output)
+- background:     opaque (transparent only on the 2.5 and 2.6 models, png/webp output)
 - moderation:     auto
 
 Guardrails:
@@ -57,8 +57,13 @@ _MIN_PIXELS = 655_360
 _MAX_PIXELS = 8_294_400
 
 # Models callers may pick. Size limits are the same for all three (docs,
-# 2026-09-28); the 2.5 models add xhigh/max quality and transparent backgrounds.
-IMAGE_MODELS = ("gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
+# 2026-09-28); the 2.5 and 2.6 models add xhigh/max quality and transparent
+# backgrounds. 2.6 (released 4 Nov 2026) takes the same controls as 2.5.
+IMAGE_MODELS = (
+    "gpt-image-2",
+    "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+    "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+)
 
 # /images/edits takes at most 16 input images on every GPT image model (API
 # reference, 2026-10-14). Extra refs are dropped from the end, so manifest
@@ -70,20 +75,21 @@ _QUALITIES = ("low", "medium", "high", "auto")
 _QUALITIES_25 = ("low", "medium", "high", "xhigh", "max", "auto")
 
 
-def is_25(model: str) -> bool:
-    return model.startswith("gpt-image-2.5")
+def has_25_options(model: str) -> bool:
+    """xhigh/max quality and transparent backgrounds: the 2.5 and 2.6 models."""
+    return model.startswith(("gpt-image-2.5", "gpt-image-2.6"))
 
 
 def check_options(model: str, quality: str, background: str, output_format: str = "webp") -> None:
     """Raise ValueError for a quality/background the model does not accept."""
-    allowed = _QUALITIES_25 if is_25(model) else _QUALITIES
+    allowed = _QUALITIES_25 if has_25_options(model) else _QUALITIES
     if quality not in allowed:
         raise ValueError(f"openai: {model} does not support quality '{quality}' (allowed: {allowed})")
     if background == "transparent":
-        if not is_25(model):
+        if not has_25_options(model):
             raise ValueError(
                 f"openai: {model} does not support background='transparent'. "
-                "Use gpt-image-2.5-flare or gpt-image-2.5-sunburst."
+                "Use a 2.5 or 2.6 model (flare or sunburst)."
             )
         if output_format not in ("png", "webp"):
             raise ValueError("openai: a transparent background needs png or webp output")
@@ -235,11 +241,11 @@ async def generate_openai(
             dropped with a WARN).
         model: One of IMAGE_MODELS; None → OPENAI_IMAGE_MODEL.
         quality: "low" | "medium" | "high" | "auto" (+ "xhigh" | "max" on
-            the 2.5 models). Default "medium".
+            the 2.5 and 2.6 models). Default "medium".
         output_format: "webp" (default), "png", or "jpeg".
         output_compression: 0-100. Only applied for jpeg/webp.
         background: "opaque" | "auto" | "transparent" ("transparent" only on
-            the 2.5 models with png/webp output).
+            the 2.5 and 2.6 models with png/webp output).
         moderation: "auto" | "low". Default "auto".
         stream: Not supported in v1 — rejected with a clear error.
 
@@ -473,6 +479,8 @@ def _legacy_cost_string(model: str, usage: dict[str, Any]) -> str:
         "gpt-image-2": (8.0, 30.0),
         "gpt-image-2.5-flare": (8.0, 30.0),
         "gpt-image-2.5-sunburst": (8.0, 30.0),
+        "gpt-image-2.6-flare": (8.0, 30.0),
+        "gpt-image-2.6-sunburst": (8.0, 30.0),
         "gpt-image-1.5": (8.0, 32.0),
         "gpt-image-1-mini": (2.5, 8.0),
     }
