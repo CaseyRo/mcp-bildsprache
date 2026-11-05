@@ -457,8 +457,8 @@ class TestIdentityIntegration:
 
 
 class TestDefaultModelSplit:
-    """No model hint + no OPENAI_IMAGE_MODEL: identity scene → gpt-image-2.5-sunburst,
-    otherwise → gpt-image-2.5-flare. An explicit model always wins."""
+    """No model hint + no OPENAI_IMAGE_MODEL: identity scene → gpt-image-2.6-sunburst,
+    otherwise → gpt-image-2.5-sunburst (bake-off 2026-11-05). An explicit model always wins."""
 
     async def _run(self, tmp_path, monkeypatch, **kwargs):
         from mcp_bildsprache import config as cfg
@@ -488,7 +488,7 @@ class TestDefaultModelSplit:
             )
         finally:
             set_loaded_packs({})
-        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-sunburst"
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.6-sunburst"
         assert result["model_reason"].startswith("identity scene")
         assert record["model_reason"] == result["model_reason"]
 
@@ -517,15 +517,15 @@ class TestDefaultModelSplit:
         result, _ = await self._run(
             tmp_path, monkeypatch, prompt="portrait", reference_images=[b"ref"]
         )
-        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-sunburst"
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.6-sunburst"
         assert result["model_reason"].startswith("identity scene")
 
     @pytest.mark.anyio
-    async def test_no_identity_uses_flare(self, tmp_path, mock_provider, monkeypatch):
+    async def test_no_identity_uses_25_sunburst(self, tmp_path, mock_provider, monkeypatch):
         result, record = await self._run(tmp_path, monkeypatch, prompt="a flat icon of a teapot")
-        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-flare"
+        assert mock_provider.await_args.kwargs["model"] == "gpt-image-2.5-sunburst"
         assert record["model_reason"] == result["model_reason"]
-        assert "flare" in result["model_reason"]
+        assert "2.5 sunburst" in result["model_reason"]
 
     @pytest.mark.anyio
     async def test_explicit_model_wins(self, tmp_path, mock_provider, monkeypatch):
@@ -544,15 +544,15 @@ class TestDefaultModelSplit:
     @pytest.mark.parametrize(
         ("prompt", "flags", "model", "reason"),
         [
-            ("A still life on a wooden workbench. No people.", {}, "gpt-image-2.5-flare",
+            ("A still life on a wooden workbench. No people.", {}, "gpt-image-2.5-sunburst",
              "no person refs (prompt excludes people)"),
-            ("morning walk in the forest, no people", {}, "gpt-image-2.5-flare",
+            ("morning walk in the forest, no people", {}, "gpt-image-2.5-sunburst",
              "no person refs (prompt excludes people)"),
-            ("portrait of Casey at his desk", {}, "gpt-image-2.5-sunburst",
+            ("portrait of Casey at his desk", {}, "gpt-image-2.6-sunburst",
              "identity scene (prompt names a person)"),
-            ("portrait of Casey", {"include_people": False}, "gpt-image-2.5-flare",
+            ("portrait of Casey", {"include_people": False}, "gpt-image-2.5-sunburst",
              "no person refs (include_people=False)"),
-            ("A still life. No people.", {"include_people": True}, "gpt-image-2.5-sunburst",
+            ("A still life. No people.", {"include_people": True}, "gpt-image-2.6-sunburst",
              "identity scene (include_people=True)"),
         ],
     )

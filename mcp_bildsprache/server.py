@@ -349,11 +349,11 @@ def _pick_raster_model(
 ) -> tuple[str | None, str]:
     """generate_image's model and a short why.
 
-    Explicit model > OPENAI_IMAGE_MODEL > the default split (Casey, 2026-09-28
-    A/B): identity scenes (PERSON refs attached) get gpt-image-2.5-sunburst
-    (Casey's pick in the 2026-10-15 bake-off with the 11-photo pack; before
-    that gpt-image-2, since flare drew Casey twice in 1 of 3); everything
-    else, dog-only refs included, gets flare at ~half the price. ``why`` names the path that
+    Explicit model > OPENAI_IMAGE_MODEL > the default split from Casey's
+    2026-11-05 bake-off: identity scenes (PERSON refs attached) get
+    gpt-image-2.6-sunburst (rated 5 of 5 in both identity scenes); everything
+    else, dog-only refs included, gets gpt-image-2.5-sunburst (won the still
+    life at a third of the 2.6 price). ``why`` names the path that
     decided the person refs.
     """
     why = f" ({why})" if why else ""
@@ -362,8 +362,8 @@ def _pick_raster_model(
     if settings.openai_image_model:
         return settings.openai_image_model, "OPENAI_IMAGE_MODEL set"
     if identity_scene:
-        return "gpt-image-2.5-sunburst", f"identity scene{why}: sunburst keeps Casey's likeness"
-    return "gpt-image-2.5-flare", f"no person refs{why}: flare default (~half price)"
+        return "gpt-image-2.6-sunburst", f"identity scene{why}: 2.6 sunburst keeps Casey's likeness"
+    return "gpt-image-2.5-sunburst", f"no person refs{why}: 2.5 sunburst default"
 
 
 def _with_sync_wait_doc(fn):
@@ -1024,7 +1024,7 @@ Choosing a tool:
 - `generate_image` — the full raster pipeline. One call resolves identity +
   brand preset + provider routing + sizing + storage + cost attribution.
   Use for social/blog/OG/proposal imagery. Default provider: OpenAI
-  gpt-image-2; pick `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst`
+  (2.6-sunburst with Casey in the scene, else 2.5-sunburst); pick `gpt-image-2.5-flare` (fast) or `gpt-image-2.5-sunburst`
   (premium, editing), or their 2.6 versions, via `model`. WRITES an artifact and incurs paid-API cost.
 - `generate_diagram` — flow / sequence / state diagrams from free-text or a
   Mermaid source (flowchart/graph, sequenceDiagram, stateDiagram only).
@@ -1186,8 +1186,8 @@ async def generate_image(
 
     Default model (no ``model``, no ``OPENAI_IMAGE_MODEL``): identity scenes
     (identity-pack PERSON refs or caller ``reference_images``) render on
-    gpt-image-2.5-sunburst; everything else, dog-only scenes included, on the cheaper
-    gpt-image-2.5-flare. The result's ``model_reason`` says which rule applied
+    gpt-image-2.6-sunburst; everything else, dog-only scenes included, on the cheaper
+    gpt-image-2.5-sunburst. The result's ``model_reason`` says which rule applied
     and why the person refs were (not) attached. Gemini Nano Banana is also active. FLUX and Recraft are
     temporarily disabled at the dispatcher; hinting at them raises
     ``PROVIDER_TEMPORARILY_DISABLED``.
@@ -1225,8 +1225,8 @@ async def generate_image(
             slots (manifest slots tagged ``dog``), False = suppress them. Ignored when no
             identity pack is loaded for the resolved context.
         include_people: Override whether Casey's person refs attach for
-            ``casey``: True = force them (gpt-image-2.5-sunburst), False = suppress them
-            (flare). None (default) reads the prompt: "no people", "nobody",
+            ``casey``: True = force them (gpt-image-2.6-sunburst), False = suppress them
+            (gpt-image-2.5-sunburst). None (default) reads the prompt: "no people", "nobody",
             "still life", "empty room", "without people", "keine Personen",
             "ohne Menschen" → no refs; a person word (Casey, man, person,
             portrait, he/him/his, people) → refs; neither → manifest rules.
@@ -1838,11 +1838,11 @@ async def list_models() -> ModelsResult:
             "name": "OpenAI gpt-image",
             "models": list(OPENAI_MODELS),
             "default": settings.openai_image_model
-            or "gpt-image-2.5-sunburst for identity scenes, else gpt-image-2.5-flare",
+            or "gpt-image-2.6-sunburst for identity scenes, else gpt-image-2.5-sunburst",
             "best_for": (
                 "Default raster path. Without a model hint, identity scenes "
-                "(person reference images) use gpt-image-2.5-sunburst (closest "
-                "likeness) and everything else gpt-image-2.5-flare (~half the price). "
+                "(person reference images) use gpt-image-2.6-sunburst (closest "
+                "likeness, bake-off 2026-11-05) and everything else gpt-image-2.5-sunburst. "
                 "Strong typography in-image, "
                 "sibling-series consistency, reference image support. "
                 "gpt-image-2.5-flare is fast; gpt-image-2.5-sunburst is the "
