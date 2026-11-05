@@ -6,6 +6,6 @@ Each task fits one session. The task that produces the done artifact is marked (
 - [x] 2. Tool: `output`, `frame_count`, `frame_duration_ms` with validation; skip WebP; store `.gif`/`.svg`; ledger format; docstring and `list_models`; tests.
 - [x] 3. Cost: `gpt-5.5` row, SVG author cost in `ai_attribution`; tests for the math.
 - [x] 4. SVG CSP header on the static mount; test.
-- [ ] 5. Ruff, pytest, pip-audit on the exported lock; PR, green CI, squash-merge.
-- [ ] 6. Deploy check, one live GIF and one live SVG through the MCP tool (done artifact).
-- [ ] 7. Reflect: estimate vs actual, one line on the Linear card
+- [x] 5. Ruff, pytest, pip-audit on the exported lock; PR, green CI, squash-merge.
+- [x] 6. Deploy check, one live GIF and one live SVG through the MCP tool (done artifact).
+- [x] 7. Reflect: estimate vs actual, one line on the Linear card
