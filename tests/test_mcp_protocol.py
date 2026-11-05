@@ -139,7 +139,10 @@ async def test_gpt_image_25_models_and_quality_on_the_surface():
         tools = {t.name: t for t in await client.list_tools()}
     for name in ("generate_image", "generate_prompt"):
         enum = tools[name].input_schema["properties"]["model"]["anyOf"][0]["enum"]
-        assert {"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} <= set(enum)
+        assert {
+            "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+            "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+        } <= set(enum)
     props = tools["generate_image"].input_schema["properties"]
     assert set(props["quality"]["anyOf"][0]["enum"]) == {"low", "medium", "high", "xhigh", "max", "auto"}
     assert "transparent" in props

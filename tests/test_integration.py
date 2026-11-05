@@ -673,7 +673,8 @@ class TestOtherTools:
         # Banana Pro + Nano Banana 2, NOT gemini-2.5-flash-image.
         by_id = {m["id"]: m for m in providers}
         assert by_id["openai"]["models"] == [
-            "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"
+            "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+            "gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
         ]
         assert by_id["openai"]["default"] == "gpt-image-2"
         assert "gemini-3-pro-image-preview" in by_id["gemini"]["models"]

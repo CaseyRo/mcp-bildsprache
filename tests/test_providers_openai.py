@@ -137,7 +137,10 @@ class TestDispatchAndCapture:
         assert payload["model"] == "gpt-image-2"
         assert r.model == "gpt-image-2"
 
-    @pytest.mark.parametrize("model", ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"])
+    @pytest.mark.parametrize(
+        "model",
+        ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"],
+    )
     async def test_model_is_sent_and_reported(self, httpx_mock: HTTPXMock, model: str) -> None:
         import json as _json
 
@@ -148,12 +151,13 @@ class TestDispatchAndCapture:
 
 
 class TestGptImage25Options:
-    async def test_xhigh_quality_and_transparent_sent(self, httpx_mock: HTTPXMock) -> None:
+    @pytest.mark.parametrize("model", ["gpt-image-2.5-flare", "gpt-image-2.6-flare"])
+    async def test_xhigh_quality_and_transparent_sent(self, httpx_mock: HTTPXMock, model: str) -> None:
         import json as _json
 
         httpx_mock.add_response(json=_response_body(usage={"input_tokens": 1, "output_tokens": 1}))
         await generate_openai(
-            "x", model="gpt-image-2.5-flare", quality="xhigh", background="transparent"
+            "x", model=model, quality="xhigh", background="transparent"
         )
         payload = _json.loads(httpx_mock.get_request().read())
         assert (payload["quality"], payload["background"], payload["output_format"]) == (
