@@ -1418,9 +1418,14 @@ async def generate_image(
         model=specific_model,
         width=w,
         height=h,
+        output=output,
+        frame_count=frame_count,
+        svg_model=settings.openai_svg_model,
     )
+    what = {"gif": "Generating this GIF", "svg": "Generating this SVG (about 2 minutes)"}
     if not await _confirm_cost(
-        ctx, what="Generating this image", estimated_cost_eur=est_cost, provider=selected_provider
+        ctx, what=what.get(output, "Generating this image"), estimated_cost_eur=est_cost,
+        provider=selected_provider,
     ):
         return GenerateImageResult(**{
             "cancelled": True,

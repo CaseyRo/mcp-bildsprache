@@ -306,6 +306,14 @@ def _validate(payload: dict[str, Any]) -> None:
         )
 
 
+# Pre-call reference counts from the 5 Nov 2026 COS-21 live renders: a 9-frame
+# 512 px GIF used ~2073 output tokens (EUR 0.058); an SVG's gpt-5.5 author spent
+# about EUR 0.2 on top of the image (EUR 0.22-0.28 in all).
+_GIF_TOKENS_PER_FRAME = 230
+_GIF_DEFAULT_FRAMES = 9
+_SVG_AUTHOR_USAGE = Usage(input_tokens=2000, output_tokens=7500)
+
+
 def estimate_cost_eur(
     *,
     provider: str,
@@ -314,8 +322,15 @@ def estimate_cost_eur(
     height: int | None = None,
     tier: Tier = "standard",
     image_format: Literal["raster", "vector"] = "raster",
+    output: Literal["raster", "gif", "svg"] = "raster",
+    frame_count: int | None = None,
+    svg_model: str = "gpt-5.5",
 ) -> float | None:
     """Best-effort EUR cost estimate computed *before* a provider call.
+
+    ``output`` (COS-37): a GIF bills its frame sheet, about
+    ``_GIF_TOKENS_PER_FRAME`` output tokens per 512 px frame (default 9 frames);
+    an SVG adds the author model's (``svg_model``) tokens on its own row.
 
     Used to surface an estimated cost in the cost-confirmation elicitation,
     which must run before any paid API call (so the real usage-based cost in
@@ -376,6 +391,8 @@ def estimate_cost_eur(
             if buckets:
                 nearest = min(buckets, key=lambda b: abs(b - longest_edge))
                 out_tokens = int(per_image[str(nearest)])
+        if output == "gif":
+            out_tokens = _GIF_TOKENS_PER_FRAME * (frame_count or _GIF_DEFAULT_FRAMES)
         if out_tokens is None:
             # No reference table — fall back to a conservative 1120-token
             # (~1K-image) figure so the estimate is in the right ballpark.
@@ -396,7 +413,14 @@ def estimate_cost_eur(
     except Exception as exc:
         logger.debug("estimate_cost_eur: compute_cost failed for %s/%s: %s", provider, model, exc)
         return None
-    return result.amount_eur
+    if output != "svg":
+        return result.amount_eur
+    try:
+        author = compute_cost(table=table, provider=provider, model=svg_model, usage=_SVG_AUTHOR_USAGE, tier=tier)
+    except Exception as exc:
+        logger.debug("estimate_cost_eur: svg author %s not priced: %s", svg_model, exc)
+        return None
+    return round(result.amount_eur + author.amount_eur, 6)
 
 
 def format_legacy_cost_estimate(payload: dict[str, Any]) -> str:
