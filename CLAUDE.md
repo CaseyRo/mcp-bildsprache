@@ -68,6 +68,13 @@ Tests mirror modules one-to-one: `tests/test_<module>.py` holds unit tests for `
 2. Tags the next patch `v<new>` (tag-only: nothing is committed back, `pyproject.toml` and the CHANGELOG stay static).
 3. Builds a multi-arch image to `ghcr.io/<repo>:<version>` and `:latest`. Production does not use it (see Production deployment).
 
+**After any release that changes a tool, parameter or enum (portal catalog refresh, COS-64):** clients behind the Cloudflare portal see a cached tool list, in two layers.
+
+1. The portal's server record (`/accounts/{acct}/access/ai-controls/mcp/servers`, id `mcp-bildsprache`) re-polls on its own within about 2 hours. To skip the wait, `POST .../servers/mcp-bildsprache/sync` with a short-lived "MCP Portals Write" token (`db3d398df73946acb755c05b69edfc30`, minted per the `cf` skill), then check that the record's `tools[]` contains the new name (for example `frame_count`).
+2. The claude.ai account connector keeps the tool list it fetched at OAuth-connect time. A synced record does not reach it, and neither does a new Claude Code session or `/mcp`. Casey disconnects and reconnects the Cloudflare connector in claude.ai Settings > Connectors. Done when the `generate_image` schema in a new session shows the new parameter.
+
+On 6 Nov 2026 the record already had `output`, `frame_count` and the 2.6 models (synced 13:29 UTC, a day after PR #69), while every session still showed the 5 Nov schema: layer 2 was the drift. Until layer 2 is done, a new parameter is reachable only over the Tailnet host.
+
 `pyproject.toml`'s `version` therefore lags the tags; `/health` reports it plus the `git_commit` baked at build time.
 
 ## Architecture
