@@ -372,6 +372,25 @@ def test_gpt_image_25_priced_like_gpt_image_2(model):
     assert estimate_cost_eur(provider="openai", model=model, width=1024, height=1024) == base
 
 
+class TestEstimatePerOutput:
+    """COS-37: the pre-call estimate is priced per output format, near the 5 Nov live figures."""
+
+    @staticmethod
+    def _est(**kw):
+        return estimate_cost_eur(provider="openai", model="gpt-image-2.6-flare", width=1200, height=1200, **kw)
+
+    def test_still(self) -> None:
+        assert self._est() == self._est(output="raster") == pytest.approx(0.034, abs=0.002)
+
+    def test_gif_about_live_figure_and_scales_with_frames(self) -> None:
+        assert self._est(output="gif") == pytest.approx(0.058, abs=0.005)  # 9 frames live: EUR 0.058
+        assert self._est(output="gif", frame_count=16) > self._est(output="gif", frame_count=2)
+
+    def test_svg_adds_author(self) -> None:
+        assert self._est(output="svg") == pytest.approx(0.25, abs=0.03)  # live: EUR 0.22-0.28
+        assert self._est(output="svg", svg_model="no-such-model") is None
+
+
 class TestGifSvgCost:
     """COS-21: GIF tokens bill like image tokens; SVG adds the author's text-model tokens."""
 
