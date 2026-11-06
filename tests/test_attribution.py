@@ -384,6 +384,7 @@ class TestEstimatePerOutput:
 
     def test_gif_about_live_figure_and_scales_with_frames(self) -> None:
         assert self._est(output="gif") == pytest.approx(0.058, abs=0.005)  # 9 frames live: EUR 0.058
+        assert self._est(output="gif", frame_count=4) == pytest.approx(0.041, abs=0.005)  # 6 Nov live
         assert self._est(output="gif", frame_count=16) > self._est(output="gif", frame_count=2)
 
     def test_svg_adds_author(self) -> None:

@@ -306,10 +306,12 @@ def _validate(payload: dict[str, Any]) -> None:
         )
 
 
-# Pre-call reference counts from the 5 Nov 2026 COS-21 live renders: a 9-frame
-# 512 px GIF used ~2073 output tokens (EUR 0.058); an SVG's gpt-5.5 author spent
+# Pre-call reference counts from live renders: GIF output tokens were 2073 for
+# 9 frames at 512x512 (5 Nov 2026) and 1419 for 4 frames at 512x272 (6 Nov 2026),
+# so a fixed sheet cost plus a per-frame cost; an SVG's gpt-5.5 author spent
 # about EUR 0.2 on top of the image (EUR 0.22-0.28 in all).
-_GIF_TOKENS_PER_FRAME = 230
+_GIF_SHEET_TOKENS = 900
+_GIF_TOKENS_PER_FRAME = 130
 _GIF_DEFAULT_FRAMES = 9
 _SVG_AUTHOR_USAGE = Usage(input_tokens=2000, output_tokens=7500)
 
@@ -328,8 +330,8 @@ def estimate_cost_eur(
 ) -> float | None:
     """Best-effort EUR cost estimate computed *before* a provider call.
 
-    ``output`` (COS-37): a GIF bills its frame sheet, about
-    ``_GIF_TOKENS_PER_FRAME`` output tokens per 512 px frame (default 9 frames);
+    ``output`` (COS-37): a GIF bills its frame sheet, a fixed part plus a part
+    per frame (default 9 frames);
     an SVG adds the author model's (``svg_model``) tokens on its own row.
 
     Used to surface an estimated cost in the cost-confirmation elicitation,
@@ -392,7 +394,7 @@ def estimate_cost_eur(
                 nearest = min(buckets, key=lambda b: abs(b - longest_edge))
                 out_tokens = int(per_image[str(nearest)])
         if output == "gif":
-            out_tokens = _GIF_TOKENS_PER_FRAME * (frame_count or _GIF_DEFAULT_FRAMES)
+            out_tokens = _GIF_SHEET_TOKENS + _GIF_TOKENS_PER_FRAME * (frame_count or _GIF_DEFAULT_FRAMES)
         if out_tokens is None:
             # No reference table — fall back to a conservative 1120-token
             # (~1K-image) figure so the estimate is in the right ballpark.
